@@ -10,6 +10,7 @@ pyenvs=$(echo $pyenvs \
 
 # trim trailing ","
 TOXENV=${pyenvs%?}
+TOXBUILD=false
 
 echo "CIRCLE_NODE_INDEX: " $CIRCLE_NODE_INDEX
 echo "CIRCLE_NODE_TOTAL: " $CIRCLE_NODE_TOTAL
