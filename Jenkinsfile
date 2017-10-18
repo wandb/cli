@@ -1,11 +1,13 @@
 pipeline {
-    agent {
-        docker { image 'themattrix/tox' }
-    }
-    stages {
-        stage('Test') {
-            steps {
-                sh 'tox'
+    node("k8s") {
+        agent {
+            docker { image 'themattrix/tox' }
+        }
+        stages {
+            stage('Test') {
+                steps {
+                    sh 'tox'
+                }
             }
         }
     }
