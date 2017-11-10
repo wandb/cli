@@ -8,6 +8,7 @@ from six.moves import configparser
 from functools import wraps
 import logging
 import hashlib
+import mimetypes
 import os
 import json
 import yaml
@@ -458,7 +459,7 @@ class Api(object):
         return response['upsertBucket']['bucket']
 
     @normalize_exceptions
-    def upload_urls(self, project, files, run=None, entity=None, description=None):
+    def upload_urls(self, project, files, content_types, run=None, entity=None, description=None):
         """Generate temporary resumeable upload urls
 
         Args:
@@ -477,11 +478,11 @@ class Api(object):
                 }
         """
         query = gql('''
-        query Model($name: String!, $files: [String]!, $entity: String!, $run: String!, $description: String) {
+        query Model($name: String!, $files: [String]!, $contentTypes: [String]!, $entity: String!, $run: String!, $description: String) {
             model(name: $name, entityName: $entity) {
                 bucket(name: $run, desc: $description) {
                     id
-                    files(names: $files) {
+                    files(names: $files, contentTypes: $contentTypes) {
                         edges {
                             node {
                                 name
@@ -498,7 +499,8 @@ class Api(object):
             'name': project, 'run': run or self.settings('run'),
             'entity': entity or self.settings('entity'),
             'description': description,
-            'files': [file for file in files]
+            'files': [file for file in files],
+            'contentTypes': content_types
         })
 
         run = query_result['model']['bucket']
@@ -653,8 +655,9 @@ class Api(object):
         # Only tag if enabled
         if self.settings("git_tag"):
             self.tag_and_push(run, description, force)
+        content_types = [mimetypes.guess_type(fname)[0] for fname in files]
         run_id, result = self.upload_urls(
-            project, files, run, entity, description)
+            project, files, content_types, run, entity, description)
         responses = []
         for file_name, file_info in result.items():
             try:
