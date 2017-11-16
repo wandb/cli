@@ -8,9 +8,72 @@ from six.moves import queue
 import wandb
 
 
-EventFileChanged = collections.namedtuple('EventFileChanged', ('path', 'save_name', 'copy'))
+# UploadURLsJob
+EventRequestUploadURL = collections.namedtuple(
+    'EventRequestUploadURL', ('save_name', 'response_queue'))
+
+# UploadJob/FilePusher
+EventFileChanged = collections.namedtuple(
+    'EventFileChanged', ('path', 'save_name', 'copy'))
 EventJobDone = collections.namedtuple('EventJobDone', ('job'))
+
+# Shared
 EventFinish = collections.namedtuple('EventFinish', ())
+
+
+class UploadURLsJob(threading.Thread):
+    """Threadsafe way to call api.upload_urls.
+
+    Ensures only 1 call to api.upload_urls is active at a time, by batching requests
+    together.
+    """
+    MAX_FILES_PER_REQUEST = 8
+
+    def __init__(self, api, project, run_id):
+        self._api = api
+        self._project = project
+        self._run_id = run_id
+        self._request_queue = queue.Queue()
+        super(UploadURLsJob, self).__init__()
+        self.daemon = True
+
+    def run(self):
+        while True:
+            events = [self._request_queue.get()]
+            for i in range(self.MAX_FILES_PER_REQUEST):
+                try:
+                    events.append(self._request_queue.get_nowait())
+                except queue.Empty:
+                    break
+
+            finish = False
+            file_queues = {}
+            for event in events:
+                if isinstance(event, EventFinish):
+                    finish = True
+                    break
+                else:
+                    # EventRequestUploadURL
+                    file_queues[event.save_name] = event.response_queue
+
+            _, file_info = self._api.upload_urls(
+                self._project, list(file_queues.keys()), run=self._run_id)
+
+            for file_name, done_queue in file_queues.items():
+                result = file_info.get(file_name)
+                done_queue.put(result)
+
+            if finish:
+                break
+
+    def upload_url(self, file_name):
+        done_queue = queue.Queue()
+        self._request_queue.put(EventRequestUploadURL(file_name, done_queue))
+        res = done_queue.get()
+        return res
+
+    def finish(self):
+        self._request_queue.put(EventFinish())
 
 
 class UploadJob(threading.Thread):
@@ -52,7 +115,8 @@ class FilePusher(object):
     The finish() method will block until all events have been processed and all
     uploads are complete.
     """
-    def __init__(self, push_function, max_jobs=4):
+
+    def __init__(self, push_function, max_jobs=16):
         self._push_function = push_function
         self._max_jobs = max_jobs
         self._queue = queue.Queue()
@@ -87,7 +151,8 @@ class FilePusher(object):
             self._jobs.pop(job.save_name)
             if job.needs_restart:
                 #wandb.termlog('File changed while uploading, restarting: %s' % event.job.save_name)
-                self._start_job(event.job.save_name, event.job.path, event.job.copy)
+                self._start_job(event.job.save_name,
+                                event.job.path, event.job.copy)
             elif self._pending:
                 event = self._pending.pop()
                 self._start_job(event.save_name, event.path, event.copy)
@@ -100,7 +165,8 @@ class FilePusher(object):
                 self._start_job(event.save_name, event.path, event.copy)
 
     def _start_job(self, save_name, path, copy):
-        job = UploadJob(self._queue, self._push_function, save_name, path, copy)
+        job = UploadJob(self._queue, self._push_function,
+                        save_name, path, copy)
         job.start()
         self._jobs[save_name] = job
 

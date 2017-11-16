@@ -459,7 +459,7 @@ class Api(object):
         return response['upsertBucket']['bucket']
 
     @normalize_exceptions
-    def upload_urls(self, project, files, content_types, run=None, entity=None, description=None):
+    def upload_urls(self, project, files, run=None, entity=None, description=None):
         """Generate temporary resumeable upload urls
 
         Args:
@@ -495,11 +495,12 @@ class Api(object):
             }
         }
         ''')
+        content_types = [mimetypes.guess_type(fname)[0] for fname in files]
         query_result = self.client.execute(query, variable_values={
             'name': project, 'run': run or self.settings('run'),
             'entity': entity or self.settings('entity'),
             'description': description,
-            'files': [file for file in files],
+            'files': files,
             'contentTypes': content_types
         })
 
@@ -655,9 +656,8 @@ class Api(object):
         # Only tag if enabled
         if self.settings("git_tag"):
             self.tag_and_push(run, description, force)
-        content_types = [mimetypes.guess_type(fname)[0] for fname in files]
         run_id, result = self.upload_urls(
-            project, files, content_types, run, entity, description)
+            project, files, run, entity, description)
         responses = []
         for file_name, file_info in result.items():
             try:

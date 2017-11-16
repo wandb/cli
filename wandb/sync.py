@@ -286,10 +286,18 @@ class Sync(object):
 
         self._stats = stats.Stats()
 
+        self._upload_url_job = file_pusher.UploadURLsJob(
+            self._api, self._project, self._run.id)
+        self._upload_url_job.start()
+
         def push_function(save_name, path):
+            print('PUSH_FUNCTION')
             with open(path, 'rb') as f:
-                self._api.push(self._project, {save_name: f}, run=self._run.id,
-                               progress=lambda _, total: self._stats.update_progress(path, total))
+                file_info = self._upload_url_job.upload_url(save_name)
+                if file_info:
+                    self._api.upload_file(
+                        file_info['url'], f,
+                        lambda _, total: self._stats.update_progress(path, total))
         self._file_pusher = file_pusher.FilePusher(push_function)
 
         self._event_handlers = {}
@@ -454,6 +462,8 @@ class Sync(object):
             #print('FP: ', self._file_pusher._pending, self._file_pusher._jobs)
         # clear progress line.
         wandb.termlog(' ' * 79)
+
+        self._upload_url_job.finish()
 
         # Check md5s of uploaded files against what's on the file system.
         # TODO: We're currently using the list of uploaded files as our source
