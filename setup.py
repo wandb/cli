@@ -16,7 +16,9 @@ requirements = [
     'watchdog>=0.8.3',
     'GitPython>=2.1.3',
     'shortuuid>=0.5.0',
-    'pusherclient>=0.3.0'
+    'pusherclient>=0.3.0',
+    'Jinja2>=2.10',
+    'kubernetes>=4.0.0a1'
 ]
 
 test_requirements = [

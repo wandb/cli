@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wandb
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: startup
+  namespace: wandb
+data:
+  startup.sh: |
+    #!/bin/sh
+
+    #TODO: git-sync is putting me in a funky state
+    echo "gitdir: ../.git" > .git
+    if [ ! -z "${WANDB_PATCH}" ]; then
+      echo "$WANDB_PATCH" | git apply -
+    fi
+    pip install wandb
+    cd $WANDB_CWD
+    mkdir -p wandb

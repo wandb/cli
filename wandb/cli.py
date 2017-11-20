@@ -661,6 +661,8 @@ def run(ctx, program, args, id, dir, configs, message, show, cloud):
                 break
 
 
+import wandb.cloud.cli
+
 #@cli.group()
 #@click.pass_context
 #@display_error

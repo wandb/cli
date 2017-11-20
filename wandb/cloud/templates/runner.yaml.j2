@@ -1,0 +1,110 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  generateName: runner-
+  labels:
+    entity: {{ props['entity'] }}
+    project: {{ props['project'] }}
+    run_id: {{ props['run_id'] }}
+    type: {{ props['type'] }}
+    command: {{ props['command'] }}
+  namespace: wandb
+  name: run-{{ props['run_id'] }}
+spec:
+  containers:
+  - args:
+    - -c
+    - sh /startup.sh && cd $WANDB_CWD && wandb run --id {{ props['run_id'] }} {{ props['command'] }}
+    command:
+    - sh
+    env:
+    - name: LD_LIBRARY_PATH
+      value: /usr/local/nvidia/lib64:$LD_LIBRARY_PATH
+    - name: WANDB_API_KEY
+      value: {{ props['api_key'] }}
+    - name: WANDB_PROJECT
+      value: {{ props['project'] }}
+    - name: WANDB_RUN_ID
+      value: {{ props['run_id'] }}
+    - name: WANDB_SOURCE_RUN_ID
+      value: {{ props['source_run_id'] }}
+    - name: WANDB_ENTITY
+      value: {{ props['entity'] }}
+    - name: WANDB_BASE_URL
+      value: {{ props['base_url'] }}
+    - name: WANDB_DESCRIPTION
+      value: "{{ props['description'] }}"
+    - name: WANDB_PATCH
+      value: "{{ props['patch'] | replace('\n', '\\n') }}"
+    - name: WANDB_DATASETS
+      value: {{ props['datasets'] }}
+    - name: WANDB_CWD
+      value: {{ props['cwd'] }}
+    image: {{ props['image'] }}
+    imagePullPolicy: IfNotPresent
+    name: {{ props['command'] | replace('.', '-') }}
+    resources:
+      limits:
+        cpu: 900m
+        memory: 2Gi
+        {%- if props['gpu'] %}
+        nvidia.com/gpu: "1"
+        {%- endif %}
+      requests:
+        cpu: 250m
+        memory: 128Mi
+    volumeMounts:
+    - mountPath: /wandb
+      name: git-repo
+    - mountPath: /startup.sh
+      name: startup
+      subPath: startup.sh
+    {%- if props['gluster_enabled'] %}
+    - mountPath: /root
+      name: gluster
+      subPath: {{ props['api_key'] }}
+    {%- endif %}
+    workingDir: /wandb/git
+  initContainers:
+  - name: git-sync
+    image: gcr.io/google_containers/git-sync:v2.0.4
+    env:
+    - name: GIT_SYNC_ONE_TIME
+      value: "true"
+    - name: GIT_SYNC_REPO
+      value: {{ props['repo'] }}
+    - name: GIT_SYNC_DEPTH
+      value: "1"
+    - name: GIT_SYNC_DEST
+      value: git
+    - name: GIT_SYNC_REV
+      value: {{ props['rev'] }}
+    {%- if props['ssh_enabled'] %}
+    - name: GIT_SYNC_SSH
+      value: "true"
+    volumeMounts:
+    - mountPath: /etc/git-secret
+      name: git-secret
+    - mountPath: /git
+      name: git-repo
+    securityContext:
+      runAsUser: 0
+    {%- endif %}
+  volumes:
+  - emptyDir: {}
+    name: git-repo
+  - configMap:
+      name: startup
+    name: startup
+  {%- if props['ssh_enabled'] %}
+  - secret:
+      secretName: git-creds
+      defaultMode: 256
+    name: git-secret
+  {%- endif %}
+  {%- if props['gluster_enabled'] %}
+  - glusterfs:
+      endpoints: gfs-cluster1
+      path: /wandb
+    name: gluster
+  {%- endif %}
