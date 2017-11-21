@@ -291,7 +291,6 @@ class Sync(object):
         self._upload_url_job.start()
 
         def push_function(save_name, path):
-            print('PUSH_FUNCTION')
             with open(path, 'rb') as f:
                 file_info = self._upload_url_job.upload_url(save_name)
                 if file_info:
