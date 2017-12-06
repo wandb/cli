@@ -6,6 +6,7 @@ which Adro wrote.
 import os
 import random
 import subprocess
+import threading
 import uuid
 import yaml
 
@@ -106,7 +107,7 @@ class Sampler:
         """Samples from a finite set of values."""
         return lambda: random.choice(values)
 
-def run_wandb_subprocess(config):
+def run_wandb_subprocess(program, config):
     """Runs wandb in a subprocess, returning the ???
 
     config - the yaml configuration to use
@@ -118,20 +119,25 @@ def run_wandb_subprocess(config):
     # write the temporary config file, then run the command
     config_filename = os.path.join('wandb',
         'subprocess_%s.yaml' % subprocess_uuid)
-    try:
-        with open(config_filename, 'w') as config_stream:
-            yaml.dump(config, config_stream)
-        print('Created temporary config %s.' % config_filename)
-        rv = subprocess.run(['echo', config_filename],
-            stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
-        rv.wait(10)
-        rv = subprocess.run(['cat', config_filename],
-            stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
-        rv.wait(10)
-        rv = subprocess.run(['wandb', 'run', config_filename],
-            stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
-        print('return value')
-        print(rv)
-    finally:
-        os.remove(config_filename)
-        print('Removed temporary config %s.' % config_filename)
+    with open(config_filename, 'w') as config_stream:
+        yaml.dump(config, config_stream)
+    print('Created temporary config %s.' % config_filename)
+    # cmd = ['wandb', 'run', '--configs', config_filename, program]
+    cmd = ['wandb', 'run', program]
+    print('Running "%s".' % ' '.join(cmd))
+    proc = subprocess.Popen(cmd)
+        #stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
+
+    # # delete the temporary file when the command is complete
+    # def delete_config_on_exit(proc):
+    #     try:
+    #         print('Waiting for the subprocess to complete.')
+    #         proc.wait()
+    #         print('Subprocess is complete.')
+    #     finally:
+    #         os.remove(config_filename)
+    #         print('Removed temporary config %s.' % config_filename)
+    # threading.Thread(target=delete_config_on_exit, args=(proc,)).start()
+
+    # return the subprocess
+    return proc

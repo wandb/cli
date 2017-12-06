@@ -666,27 +666,65 @@ def run(ctx, program, args, id, dir, configs, message, show, cloud):
                 break
 
 
-@cli.command(context_settings=RUN_CONTEXT, help="Launch a job")
+@cli.command(context_settings=RUN_CONTEXT, help='Perform hyperparameter search')
 @click.pass_context
 @require_init
 @click.argument('program')
 @click.argument('args', nargs=-1)
+@click.option('--id', default=None,
+              help='Run id to use, default is to generate.')
+@click.option('--dir', default=None,
+              help='Files in this directory will be saved to wandb, defaults to wandb/run-<run_id>')
+@click.option('--configs', default=None,
+           help='Config file paths to load')
+@click.option('--message', '-m', default=None,
+           help='Message to associate with the run.')
 @display_error
-def search(ctx, program, args):
-    # Load the yaml file and create a Sampler object to take samples from.
-    with open("config-defaults.yaml", 'r') as config_stream:
-        try:
-            config = yaml.load(config_stream)
-            sampler = search_util.Sampler(config)
-        except yaml.YAMLError as exc:
-            print(exc)
+def search(ctx, program, args, id, dir, configs, message):
+    # # compute the environment
+    # env = copy.copy(os.environ)
+    # env['WANDB_MODE'] = 'search'
+    # if id is None:
+    #     id = wandb_run.generate_id()
+    # env['WANDB_RUN_ID'] = wandb_run.generate_id()
+    # if dir is None:
+    #     dir = wandb_run.run_dir_path(id, dry=False)
+    #     util.mkdir_exists_ok(dir)
+    # if message:
+    #     open(os.path.join(dir, 'description.md'), 'w').write('%s\n' % message)
+    # env['WANDB_RUN_DIR'] = dir
+    # if configs:
+    #     env['WANDB_CONFIG_PATHS'] = configs
 
-    # Spawn a single subprocess (for now)
-    search_util.run_wandb_subprocess(config)
+    try:
+        print('Finished setting up the environment.')
+        print('Entering simple search.')
+        cmd = ['wandb', 'run', program]
+        print('Running "%s".' % ' '.join(cmd))
+        proc = subprocess.Popen(cmd)
+        print('Exiting simple search.')
+        proc.wait()
+    except KeyboardInterrupt:
+        print('Got a keyboard interrupt.')
+        proc.kill()
+        proc.kill()
+        import sys
+        sys.exit(-1)
 
-    # all done
-    import sys
-    sys.exit(-1)
+    # # Load the yaml file and create a Sampler object to take samples from.
+    # with open("config-defaults.yaml", 'r') as config_stream:
+    #     try:
+    #         config = yaml.load(config_stream)
+    #         sampler = search_util.Sampler(config)
+    #     except yaml.YAMLError as exc:
+    #         print(exc)
+    #
+    # # Spawn a single subprocess (for now)
+    # search_util.run_wandb_subprocess(program, config)
+    #
+    # # all done
+    # import sys
+    # sys.exit(-1)
 
 #@cli.group()
 #@click.pass_context
