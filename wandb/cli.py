@@ -22,6 +22,7 @@ import sys
 import traceback
 import textwrap
 import requests
+import yaml
 
 import wandb
 from wandb.api import Api
@@ -29,6 +30,10 @@ from wandb.config import Config
 from wandb.pusher import Puller
 from wandb import wandb_run
 from wandb import util
+from wandb import search_util
+
+# These were added by adrien1 for the hyperparameter search.
+
 
 DOCS_URL = 'http://wb-client.readthedocs.io/'
 
@@ -660,6 +665,25 @@ def run(ctx, program, args, id, dir, configs, message, show, cloud):
                               (program, exitcode))
                 break
 
+
+@cli.command(context_settings=RUN_CONTEXT, help="Launch a job")
+@click.pass_context
+@require_init
+@click.argument('program')
+@click.argument('args', nargs=-1)
+@display_error
+def search(ctx, program, args):
+    print("In Wandb search")
+
+    # Load the yaml file and create a Sampler object to take samples from.
+    with open("config-defaults.yaml", 'r') as config_stream:
+        try:
+            config = yaml.load(config_stream)
+            sampler = search_util.Sampler(config)
+        except yaml.YAMLError as exc:
+            print(exc)
+
+    print(type(sampler))
 
 #@cli.group()
 #@click.pass_context
