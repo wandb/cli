@@ -3,7 +3,11 @@ Helper functions and classe for the hyperparameter search prototype code
 which Adro wrote.
 """
 
+import os
 import random
+import subprocess
+import uuid
+import yaml
 
 class Sampler:
     """
@@ -73,13 +77,6 @@ class Sampler:
         # remember previous samples to make sure samples are unique
         self._drawn_samples = set()
 
-        # take some samples from this setup
-        print("num elements:", self._n_elements)
-        for x in range(33):
-            print(self.sample())
-        import sys
-        sys.exit(-1)
-
     def sample(self):
         """Draw a unique sample from this sampler."""
         if len(self._drawn_samples) == self._n_elements:
@@ -108,3 +105,33 @@ class Sampler:
     def _set_axis(values):
         """Samples from a finite set of values."""
         return lambda: random.choice(values)
+
+def run_wandb_subprocess(config):
+    """Runs wandb in a subprocess, returning the ???
+
+    config - the yaml configuration to use
+    """
+    # create a uid and unique filenames to store data
+    subprocess_uuid = uuid.uuid4()
+    print('Launcing subprocess with id %s.' % subprocess_uuid)
+
+    # write the temporary config file, then run the command
+    config_filename = os.path.join('wandb',
+        'subprocess_%s.yaml' % subprocess_uuid)
+    try:
+        with open(config_filename, 'w') as config_stream:
+            yaml.dump(config, config_stream)
+        print('Created temporary config %s.' % config_filename)
+        rv = subprocess.run(['echo', config_filename],
+            stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
+        rv.wait(10)
+        rv = subprocess.run(['cat', config_filename],
+            stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
+        rv.wait(10)
+        rv = subprocess.run(['wandb', 'run', config_filename],
+            stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
+        print('return value')
+        print(rv)
+    finally:
+        os.remove(config_filename)
+        print('Removed temporary config %s.' % config_filename)

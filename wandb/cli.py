@@ -673,8 +673,6 @@ def run(ctx, program, args, id, dir, configs, message, show, cloud):
 @click.argument('args', nargs=-1)
 @display_error
 def search(ctx, program, args):
-    print("In Wandb search")
-
     # Load the yaml file and create a Sampler object to take samples from.
     with open("config-defaults.yaml", 'r') as config_stream:
         try:
@@ -683,7 +681,12 @@ def search(ctx, program, args):
         except yaml.YAMLError as exc:
             print(exc)
 
-    print(type(sampler))
+    # Spawn a single subprocess (for now)
+    search_util.run_wandb_subprocess(config)
+
+    # all done
+    import sys
+    sys.exit(-1)
 
 #@cli.group()
 #@click.pass_context
