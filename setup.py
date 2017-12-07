@@ -18,7 +18,8 @@ requirements = [
     'shortuuid>=0.5.0',
     'pusherclient>=0.3.0',
     'Jinja2>=2.10',
-    'kubernetes>=4.0.0a1'
+    'kubernetes>=4.0.0a1',
+    'websocket_client==0.40.0'  # Freeze for kubernetes
 ]
 
 test_requirements = [
@@ -36,6 +37,7 @@ setup(
     url='https://github.com/wandb/client',
     packages=[
         'wandb',
+        'wandb.cloud'
     ],
     package_dir={'wandb':
                  'wandb'},

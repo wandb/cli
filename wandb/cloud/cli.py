@@ -4,6 +4,7 @@ from wandb.cli import cli, display_error, api as wandb_api
 from wandb.cloud import api
 from wandb import wandb_dir
 from distutils.spawn import find_executable
+from wandb.pusher import Puller
 from six.moves.configparser import ConfigParser
 
 
@@ -54,8 +55,15 @@ def run(command, image=None):
     if not wandb_api.git.enabled:
         raise ClickException(
             "run can only be run from within git repositories.")
-    click.echo("\U0001F680 script in the \u26C5")
+    click.echo("\U0001F680 script in \u26C5 %s" %
+               api.context["name"])
     run_id = api.launch_run(command, image=image)
+
+    if run_id:
+        puller = Puller(run_id)
+        puller.sync()
+    # TODO: Check failure
+    api.kill_me_now(run_id)
 
 
 @cloud.command(help="Enable the container to use your ssh key for git checkouts")
@@ -71,6 +79,21 @@ def enable_ssh(host, key):
     with open(settings, "w") as f:
         config.write(f)
     click.echo("SSH enabled!")
+
+
+@cloud.command(help="Enable gpu based scheduling")
+@click.option("--tag", help="The resource tag to target gpu hosts in the cluster", default="nvidia.com/gpu")
+@click.option("--count", help="The number of gpu's to associate with a container", default="1")
+@display_error
+def enable_gpus(tag, count):
+    config = ConfigParser()
+    settings = wandb_dir() + "/settings"
+    config.read(settings)
+    config.set("default", "gpu_tag", tag)
+    config.set("default", "gpu_count", tag)
+    with open(settings, "w") as f:
+        config.write(f)
+    click.echo("GPU based scheduling enabled!")
 
 
 @cloud.command(help="Get the status of a run")

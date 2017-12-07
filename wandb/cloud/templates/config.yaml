@@ -11,12 +11,22 @@ metadata:
 data:
   startup.sh: |
     #!/bin/sh
-
+    set -e
     #TODO: git-sync is putting me in a funky state
     echo "gitdir: ../.git" > .git
     if [ ! -z "${WANDB_PATCH}" ]; then
+      echo "Applying patch"
+      sleep 1 #TODO: was getting errors from applying the patch
       echo "$WANDB_PATCH" | git apply -
     fi
-    pip install wandb
-    cd $WANDB_CWD
+    if [ ! `command -v wandb` ]; then
+        echo "wandb not found, installing..."
+        date
+        #curl -s https://wandb-install.firebaseapp.com/wandb.tar | tar -x -C /tmp
+        #pip install --use-wheel --no-index --find-links=/tmp/install/wheelhouse wandb #~10 seconds
+        #pip install --use-wheel --no-index --find-links=https://wandb-install.firebaseapp.com/wheelhouse wandb #~35 seconds
+        date
+    fi
+    cd /git/checkout/$WANDB_CWD
     mkdir -p wandb
+    echo "Running: wandb run ${WANDB_COMMAND}"

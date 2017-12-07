@@ -1,9 +1,8 @@
-from subprocess import run, Popen, PIPE
+from subprocess import Popen, PIPE
 from kubernetes import client, config, watch
 from kubernetes.stream import stream, ws_client
 import pty
 import signal
-from wandb import termlog
 from wandb import Error
 import json
 import os
@@ -21,9 +20,14 @@ logger = logging.getLogger('wandb cloud')
 PATH = os.path.abspath(os.path.dirname(__file__))
 ENV = Environment(loader=FileSystemLoader(PATH + '/templates'))
 DEFAULT_RUN_TYPE = "training"
-DEFAULT_IMAGE = "us.gcr.io/playground-111/keras:tk"
+DEFAULT_IMAGE = "wandb/base"
 api = Api()
-config.load_kube_config()
+context = {"name": "unknown", "context": {"cluster": "unknown"}}
+try:
+    config.load_kube_config()
+    _, context = config.list_kube_config_contexts()
+except FileNotFoundError:
+    pass
 
 
 def kubectl(args, stdin=False, tty=False, path=None, to_json=False, streamed=False):
@@ -34,7 +38,7 @@ def kubectl(args, stdin=False, tty=False, path=None, to_json=False, streamed=Fal
         cmd.extend(["-o", "json"])
     if stdin:
         cmd.extend(["-f", "-"])
-    if os.getenv("DEBUG"):
+    if os.getenv("VERBOSE"):
         print("\U0001F913: %s" % ' '.join(cmd))
     if tty:
         return pty.spawn(cmd)
@@ -84,9 +88,13 @@ def default_props():
         "cwd": cwd,
         "run_type": DEFAULT_RUN_TYPE,
         "base_url": "https://api.wandb.ai",
-        "image": DEFAULT_IMAGE,  # TODO: make this a public default image
+        "image": DEFAULT_IMAGE,
         "gluster_enabled": False,
-        "ssh_enabled": api.settings('ssh_enabled'),
+        "ssh_enabled": api.settings().get('ssh_enabled', False),
+        "gpu_tag": api.settings().get('gpu_tag', False),
+        "gpu_count": api.settings().get('gpu_count', 1),
+        # cloud.google.com/gke-accelerator: nvidia-tesla-p100
+        "node_selector": api.settings().get('node_selector', None),
         "source_run_id": None,
         "decription": None,
         "datasets": None,
@@ -98,7 +106,7 @@ def default_props():
 
 def join_templates(*args):
     templates = "\n---\n".join(args)
-    if os.getenv("DEBUG"):
+    if os.getenv("VERBOSE"):
         with open("wandb/k8s.yaml", "w") as f:
             f.write(templates)
     result = bytearray(templates, "utf8")
@@ -119,13 +127,16 @@ def pod_id(run_id):
 
 def logs(run_id):
     time.sleep(2)
-    click.echo(click.style("info", fg="blue", bold=True) + ": Connecting to your containers output...")
+    # click.echo(click.style("info", fg="blue", bold=True) +
+    #           ": Connecting to your containers output...")
     v1 = client.CoreV1Api()
-    w = watch.Watch()
     # TODO: likely changes to stream API: https://github.com/kubernetes-incubator/client-python/issues/199
     for e in v1.read_namespaced_pod_log("run-%s" % run_id, "wandb", follow=True, _preload_content=False):
-        sys.stdout.write(e.decode("utf8"))
+        line = e.decode("utf8")
+        sys.stdout.write(click.style("info", fg="blue", bold=True) + line)
         sys.stdout.flush()
+        if line.startswith("Running: wandb run"):
+            break
     return True
 
 
@@ -146,18 +157,18 @@ def store_ssh(host="github.com", key="~/.ssh/id_rsa"):
 
 
 def kill_me_now(run_id):
-    if click.confirm("Should we kill the process in the cluster?"):
-        kubectl(["delete", "pod", "run-%s" % ])
+    if click.confirm("\nShould we delete the pod?"):
+        kubectl(["delete", "pod", "run-%s" % run_id])
 
 
-def launch_run(command, run_type=DEFAULT_RUN_TYPE, image=DEFAULT_IMAGE, source_run_id=None, description=None):
+def launch_run(command, run_type=None, image=None, source_run_id=None, description=None):
     run_template = ENV.get_template("runner.yaml.j2")
     overrides = {
-        "type": run_type,
+        "type": run_type or DEFAULT_RUN_TYPE,
         "command": command,
         "source_run_id": source_run_id,
         "description": description,
-        "image": image
+        "image": image or DEFAULT_IMAGE
     }
     props = default_props()
     props.update(overrides)
@@ -171,8 +182,6 @@ def launch_run(command, run_type=DEFAULT_RUN_TYPE, image=DEFAULT_IMAGE, source_r
         sys.exit(0)
     signal.signal(signal.SIGINT, signal_handler)
     _events(props['run_id'])
-    # TODO: Check failure
-    kill_me_now(props['run_id'])
     return props['run_id']
 
 
@@ -196,6 +205,7 @@ def _events(run_id):
     w = watch.Watch()
     last_line = ""
     swap_log = None
+    # TODO: check failure
     for e in w.stream(v1.list_namespaced_event, "wandb"):
         if e['object'].metadata.name.startswith("run-%s" % run_id):
             level = e['object'].type

@@ -11,10 +11,14 @@ metadata:
   namespace: wandb
   name: run-{{ props['run_id'] }}
 spec:
+  {%- if props["node_selector"] %}
+  nodeSelector:
+   {{ props["node_selector"] }}
+  {%- endif %}
   containers:
   - args:
     - -c
-    - sh /startup.sh && cd $WANDB_CWD && wandb run --id {{ props['run_id'] }} {{ props['command'] }}
+    - . /startup.sh && cd /git/checkout/$WANDB_CWD && wandb run --id {{ props['run_id'] }} {{ props['command'] }}
     command:
     - sh
     env:
@@ -22,6 +26,8 @@ spec:
       value: /usr/local/nvidia/lib64:$LD_LIBRARY_PATH
     - name: WANDB_API_KEY
       value: {{ props['api_key'] }}
+    - name: WANDB_COMMAND
+      value: {{ props['command'] }}
     - name: WANDB_PROJECT
       value: {{ props['project'] }}
     - name: WANDB_RUN_ID
@@ -41,14 +47,13 @@ spec:
     - name: WANDB_CWD
       value: {{ props['cwd'] }}
     image: {{ props['image'] }}
-    imagePullPolicy: IfNotPresent
     name: {{ props['command'] | replace('.', '-') }}
     resources:
       limits:
         cpu: 900m
         memory: 2Gi
-        {%- if props['gpu'] %}
-        nvidia.com/gpu: "1"
+        {%- if props['gpu_tag'] %}
+        {{props['gpu_tag']}}: "{{props['gpu_count']}}"
         {%- endif %}
       requests:
         cpu: 250m
