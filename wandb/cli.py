@@ -671,16 +671,8 @@ def run(ctx, program, args, id, dir, configs, message, show, cloud):
 @require_init
 @click.argument('program')
 @click.argument('args', nargs=-1)
-@click.option('--id', default=None,
-              help='Run id to use, default is to generate.')
-@click.option('--dir', default=None,
-              help='Files in this directory will be saved to wandb, defaults to wandb/run-<run_id>')
-@click.option('--configs', default=None,
-           help='Config file paths to load')
-@click.option('--message', '-m', default=None,
-           help='Message to associate with the run.')
 @display_error
-def search(ctx, program, args, id, dir, configs, message):
+def search(ctx, program, args):
     # # compute the environment
     # env = copy.copy(os.environ)
     # env['WANDB_MODE'] = 'search'
