@@ -3,6 +3,7 @@ Helper functions and classe for the hyperparameter search prototype code
 which Adro wrote.
 """
 
+import copy
 import os
 import random
 import subprocess
@@ -10,14 +11,24 @@ import threading
 import uuid
 import yaml
 
+from wandb import wandb_run
+from wandb import util
+
 class Sampler:
     """
     Returns unique samples from a mixed discrete / coninuous distribution.
     """
 
-    def __init__(self, axes):
+    class NoMoreSamples(Exception):
         """
-        Axes is a dictionary of labeled axes which are either continuous:
+        Thrown by the sample() method when all samples have been exhausted.
+        """
+        pass
+
+    def __init__(self, config):
+        """
+        Config is the wandb config yaml file but parameters are generalized
+        as follows. Axes can be continuous:
 
             <axis name>: {
                 min: <float>,
@@ -36,9 +47,10 @@ class Sampler:
         The axis type is determined automatically.
         """
         # Parse the axes into our own, more explicit axes data structure.
+        self._config = copy.copy(config)
         self._axes = {}
         self._n_elements = 1
-        for label, data in axes.items():
+        for label, data in config.items():
             # All axes must be defined as dictionaries.
             if type(data) != dict:
                 continue
@@ -80,15 +92,23 @@ class Sampler:
 
     def sample(self):
         """Draw a unique sample from this sampler."""
+        # Don't sample the same point twice.
         if len(self._drawn_samples) == self._n_elements:
-            raise RuntimeError('No more unique elements to sample.')
+            raise Sampler.NoMoreSamples
+
+        # Draw a unique sample
         draw = lambda: tuple(sorted(
             [(label, f()) for (label, f) in self._axes.items()]))
         sample = draw()
         while sample in self._drawn_samples:
             sample = draw()
         self._drawn_samples.add(sample)
-        return sample
+
+        # Apply it to the config file
+        config = copy.copy(self._config)
+        for key, value in sample:
+            config[key]['value'] = value
+        return config
 
     @staticmethod
     def _linear_range_axis(min, max):
@@ -113,31 +133,18 @@ def run_wandb_subprocess(program, config):
     config - the yaml configuration to use
     """
     # create a uid and unique filenames to store data
-    subprocess_uuid = uuid.uuid4()
-    print('Launcing subprocess with id %s.' % subprocess_uuid)
+    uid = wandb_run.generate_id()
+    path = wandb_run.run_dir_path(uid, dry=False)
+    util.mkdir_exists_ok(path)
+    config_filename = os.path.join(path, 'cofig_search_template.yaml')
+    proc_stdout = open(os.path.join(path, 'stdout'), 'wb')
+    proc_stderr = open(os.path.join(path, 'stderr'), 'wb')
 
     # write the temporary config file, then run the command
-    config_filename = os.path.join('wandb',
-        'subprocess_%s.yaml' % subprocess_uuid)
     with open(config_filename, 'w') as config_stream:
-        yaml.dump(config, config_stream)
+        yaml.dump(config, config_stream, default_flow_style=False)
     print('Created temporary config %s.' % config_filename)
-    # cmd = ['wandb', 'run', '--configs', config_filename, program]
-    cmd = ['wandb', 'run', program]
+    cmd = ['wandb', 'run', '--configs', config_filename, '--id', uid, program]
     print('Running "%s".' % ' '.join(cmd))
-    proc = subprocess.Popen(cmd)
-        #stdout=subprocess.STDOUT, stderr=subprocess.STDOUT)
-
-    # # delete the temporary file when the command is complete
-    # def delete_config_on_exit(proc):
-    #     try:
-    #         print('Waiting for the subprocess to complete.')
-    #         proc.wait()
-    #         print('Subprocess is complete.')
-    #     finally:
-    #         os.remove(config_filename)
-    #         print('Removed temporary config %s.' % config_filename)
-    # threading.Thread(target=delete_config_on_exit, args=(proc,)).start()
-
-    # return the subprocess
+    proc = subprocess.Popen(cmd, stdout=proc_stdout, stderr=proc_stderr)
     return proc

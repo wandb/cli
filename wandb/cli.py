@@ -673,50 +673,34 @@ def run(ctx, program, args, id, dir, configs, message, show, cloud):
 @click.argument('args', nargs=-1)
 @display_error
 def search(ctx, program, args):
-    # # compute the environment
-    # env = copy.copy(os.environ)
-    # env['WANDB_MODE'] = 'search'
-    # if id is None:
-    #     id = wandb_run.generate_id()
-    # env['WANDB_RUN_ID'] = wandb_run.generate_id()
-    # if dir is None:
-    #     dir = wandb_run.run_dir_path(id, dry=False)
-    #     util.mkdir_exists_ok(dir)
-    # if message:
-    #     open(os.path.join(dir, 'description.md'), 'w').write('%s\n' % message)
-    # env['WANDB_RUN_DIR'] = dir
-    # if configs:
-    #     env['WANDB_CONFIG_PATHS'] = configs
+    # Load the yaml file and create a Sampler object to take samples from.
+    with open("config-defaults.yaml", 'r') as config_stream:
+        try:
+            config = yaml.load(config_stream)
+            sampler = search_util.Sampler(config)
+        except yaml.YAMLError as exc:
+            print(exc)
 
+    # get a sample
     try:
-        print('Finished setting up the environment.')
-        print('Entering simple search.')
-        cmd = ['wandb', 'run', program]
-        print('Running "%s".' % ' '.join(cmd))
-        proc = subprocess.Popen(cmd)
-        print('Exiting simple search.')
-        proc.wait()
-    except KeyboardInterrupt:
-        print('Got a keyboard interrupt.')
-        proc.kill()
-        proc.kill()
+        proc_config = sampler.sample()
+    except search_util.Sampler.NoMoreSamples:
+        print('Exhausted all samples.')
         import sys
         sys.exit(-1)
 
-    # # Load the yaml file and create a Sampler object to take samples from.
-    # with open("config-defaults.yaml", 'r') as config_stream:
-    #     try:
-    #         config = yaml.load(config_stream)
-    #         sampler = search_util.Sampler(config)
-    #     except yaml.YAMLError as exc:
-    #         print(exc)
-    #
-    # # Spawn a single subprocess (for now)
-    # search_util.run_wandb_subprocess(program, config)
-    #
-    # # all done
-    # import sys
-    # sys.exit(-1)
+    # run the subprocess, killing it if I see a ctrl-c
+    try:
+        proc = search_util.run_wandb_subprocess(program, proc_config)
+        proc.wait()
+    except KeyboardInterrupt:
+        print('\nGot a keyboard interrupt.')
+    finally:
+        proc.kill()
+
+    # all done
+    import sys
+    sys.exit(-1)
 
 #@cli.group()
 #@click.pass_context

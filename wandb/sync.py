@@ -244,8 +244,12 @@ class Sync(object):
             else:
                 self._description = os.getenv('WANDB_DESCRIPTION')
         try:
-            self.tty = (sys.stdin.isatty() and
-                        os.getpgrp() == os.tcgetpgrp(sys.stdout.fileno()))  # check if background process
+            # Adro: I changed this because I was having trouble piping stdout
+            # on subprosses during the parameter sweep.
+            self.tty = sys.stdin.isatty()
+
+            # self.tty = (sys.stdin.isatty() and
+            #             os.getpgrp() == os.tcgetpgrp(sys.stdout.fileno()))  # check if background process
         except AttributeError:  # windows
             self.tty = sys.stdin.isatty()  # TODO Check for background process in windows
 
