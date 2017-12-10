@@ -12,6 +12,7 @@ import uuid
 import yaml
 
 from wandb import wandb_run
+from wandb import api as wandb_api
 from wandb import util
 
 class Sampler:
@@ -148,3 +149,14 @@ def run_wandb_subprocess(program, config):
     print('Running "%s".' % ' '.join(cmd))
     proc = subprocess.Popen(cmd, stdout=proc_stdout, stderr=proc_stderr)
     return proc
+
+def query_runs():
+    """
+    Figures out all the runs in the current project.
+    """
+    # figure out the current project
+    api = wandb_api.Api()
+    project = api.settings()['project']
+    list_runs = api.list_runs(project)
+    print('list_runs:\n', list_runs[0])
+    print('list_runs:\n', list_runs[-1])

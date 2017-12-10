@@ -673,6 +673,11 @@ def run(ctx, program, args, id, dir, configs, message, show, cloud):
 @click.argument('args', nargs=-1)
 @display_error
 def search(ctx, program, args):
+    # see how we can query all the runs
+    search_util.query_runs()
+    import sys
+    sys.exit(-1)
+
     # Load the yaml file and create a Sampler object to take samples from.
     with open("config-defaults.yaml", 'r') as config_stream:
         try:
