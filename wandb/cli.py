@@ -674,8 +674,7 @@ def run(ctx, program, args, id, dir, configs, message, show, cloud):
 @click.argument('args', nargs=-1)
 @display_error
 def search(ctx, program, args):
-    # os.environ['WANDB_MODE'] = 'run'
-    # run = wandb.init()
+
     #
     # import math # debug
     #
@@ -687,14 +686,12 @@ def search(ctx, program, args):
     #     run.summary['epoch'] = i
     #     run.summary['sine'] = sine
     #     run.summary['cosine'] = cosine
-    #     run.history.add({'epoch': i, 'sine': sine, 'cosine': cosine})
+    #
     #     print(run.history)
     #     time.sleep(1)
 
     # # see how we can query all the runs
 
-    # import sys
-    # sys.exit(-1)
 
     # Parameters to the algorithm.
     # TODO: Make these user-specifiable (maybe in the config yaml).
@@ -702,42 +699,56 @@ def search(ctx, program, args):
     sleep_time = 10.0 # seconds between polling the database
     max_nets = 1 # maximum nets to search through
 
+    # initialize a wandb run
+    os.environ['WANDB_MODE'] = 'run'
+    run = wandb.init()
+
     # Load the yaml file and create a Sampler object to take samples from.
     with open("config-defaults.yaml", 'r') as config_stream:
         config = yaml.load(config_stream)
     sampler = search_util.Sampler(config)
 
     # Iterate through all the processes
-    procs = {}
+    running_uids = [ None ] * n_parallel_processes
+    all_procs = {}
     try:
-        for _ in range(max_nets):
-            try:
-                # sample some parameters and launch a subprocess
-                proc_config = sampler.sample()
-                uid, proc = \
-                    search_util.run_wandb_subprocess(program, proc_config)
-                procs[uid] = proc
+        for _ in range(5):
+            history_stats = {}
+            status = search_util.RunStatus(all_procs.keys())
+            for index, uid in enumerate(running_uids):
+                # kill the process if necessary
+                if status.should_be_killed(uid):
+                    raise NotImplementedError('Need to kill this process.')
 
-                # poll to see how things are going
-                for ii in range(5):
-                    status = search_util.query_runs(procs.keys())
-                    print('status %s:\n%s' % (ii, status))
-                    time.sleep(10.0)
-                print('Ok. Time to jump ship.')
-                break
-            except search_util.Sampler.NoMoreSamples:
-                print('Exhausted all samples.')
-                break
+                # spawn a new process if necessary
+                if status.should_be_replaced(uid):
+                    # sample some parameters and launch a subprocess
+                    proc_config = sampler.sample()
+                    new_uid, new_proc = \
+                        search_util.run_wandb_subprocess(program, proc_config)
+                    running_uids[index] = new_uid
+                    all_procs[new_uid] = new_proc
+
+                # save the stats
+                history_stats['val_loss_%i' % index] = \
+                    status.summary_val_loss(uid)
+            print('setting history status:', history_status)
+            run.history.add(history_stats)
+            print('Sleeping for 10 seconds.')
+            time.sleep(10.0)
+    except search_util.Sampler.NoMoreSamples:
+        # FIXME: Need to think through what happens if there are no more
+        print('Exhausted all samples.')
     except KeyboardInterrupt:
         print('\nGot a keyboard interrupt.')
     finally:
         # Clean up all subprocesses.
-        for uid, proc in procs.items():
+        for uid, proc in all_procs.items():
             if proc.poll() is None:
-                proc.kill()
-                print('Subprocess %s killed.' % uid)
+                print('Subprocess %s will be killed.' % uid)
             else:
                 print('Subprocess %s already complete.' % uid)
+            proc.kill()
         print('Killed all subprocesses.')
 
 #@cli.group()

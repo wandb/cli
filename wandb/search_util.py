@@ -152,60 +152,91 @@ def run_wandb_subprocess(program, config):
     proc = subprocess.Popen(cmd, stdout=proc_stdout, stderr=proc_stderr)
     return (uid, proc)
 
-def query_runs(uids):
+class RunStatus:
     """
-    Gets the following information the runs with specified ids = [id1, id2, ...]
-    {
-        id1: {
-            'state': <string>,
-            'val_loss_history': <list of float>,
-            'summary_val_loss': <float>
-            }
-        id2: ...
-    }
+    Computes and stores the stastus for a bunch of runs, each of which is
+    referenced by a uid.
     """
-    # Load the results into a dictionary
-    results = { uid :
-        {
-            'state': 'not_started',
-            'val_loss_history': [],
-            'summary_val_loss': float('inf')
-        } for uid in uids }
 
-    # Query by parsing the filesystem.
-    # TODO: Do this by reading from the website.
-    wandb_path = 'wandb'
-    wandb_history = 'wandb-history.jsonl'
-    run_paths = os.listdir(wandb_path)
-    for uid in uids:
-        # figure out the path for this run
-        print('uid:', uid)
-        path_filter = re.compile('run-\d{8,8}_\d{6,6}-%s' % uid)
-        run_path = max(filter(path_filter.match, run_paths))
+    def __init__(self, uids):
+        """
+        Creates a RunStatus object containting information about the listed IDs.
+        """
+        # Load the results into a dictionary
+        self._runs = { uid :
+            {
+                'state': 'not_started',
+                'val_loss_history': [],
+                'summary_val_loss': 0.0,
+            } for uid in uids }
 
-        # parse the runfile
-        history_path = os.path.join(wandb_path, run_path, wandb_history)
+        # Now load run status from the website.
+        self._query_runs()
+
+    def should_be_killed(self, uid):
+        """
+        Returns True if the specified run should be killed, which also implies
+        that should_be_replaced() is True too.
+        """
+        return False
+
+    def should_be_replaced(self, uid):
+        """
+        Returns true if we should start another run to replace this one.
+        """
+        if uid is None:
+            return True
+        else:
+            return False
+
+    def summary_val_loss(self, uid):
+        """
+        Returns the best (lowest) validation loss recorded for this run, or 0.0
+        if no such loss has yet been recorded.
+        """
         try:
-            with open(history_path) as history:
-                 results[uid]['val_loss_history'] = [json.loads(line)['val_loss']
-                    for line in history.readlines()]
-        except FileNotFoundError:
-            pass
+            return self._runs[uid]['summary_val_loss']
+        except KeyError:
+            return 0.0
 
-    # Run a gql query to get this rest of the data.
-    # TODO: Eventually, all data should come this way, but I was having trouble
-    # adding `history` to this query.
-    api = wandb_api.Api()
-    project = api.settings()['project']
-    for run in api.list_runs(project):
-        uid = run['name'].strip()
-        if uid in uids:
+    def _query_runs(self):
+        """
+        Queries the website for run information and loads it into
+        self._runs.
+        """
+
+        # Query by parsing the filesystem.
+        # TODO: Do this by reading from the website.
+        wandb_path = 'wandb'
+        wandb_history = 'wandb-history.jsonl'
+        run_paths = os.listdir(wandb_path)
+        for uid in self._runs:
+            # figure out the path for this run
+            print('uid:', uid)
+            path_filter = re.compile('run-\d{8,8}_\d{6,6}-%s' % uid)
+            run_path = max(filter(path_filter.match, run_paths))
+
+            # parse the runfile
+            history_path = os.path.join(wandb_path, run_path, wandb_history)
             try:
-                results[uid]['state'] = run['state']
-                results[uid]['summary_val_loss'] = \
-                    json.loads(run['summaryMetrics'])['val_loss']
-            except KeyError:
+                with open(history_path) as history:
+                     self._runs[uid]['val_loss_history'] = \
+                        [json.loads(line)['val_loss']
+                            for line in history.readlines()]
+            except FileNotFoundError:
                 pass
 
-    # All done
-    return results
+        # Run a gql query to get this rest of the data.
+        # TODO: Eventually, all data should come this way, but I was having trouble
+        # adding `history` to this query.
+        api = wandb_api.Api()
+        project = api.settings()['project']
+        for run in api.list_runs(project):
+            uid = run['name'].strip()
+            if uid in self._runs:
+                try:
+                    self._runs[uid]['state'] = run['state']
+                    self._runs[uid]['summary_val_loss'] = \
+                        json.loads(run['summaryMetrics'])['val_loss']
+                except KeyError:
+                    pass
