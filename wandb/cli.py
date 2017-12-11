@@ -19,6 +19,7 @@ from click.utils import LazyFile
 from click.exceptions import BadParameter, ClickException
 import whaaaaat
 import sys
+import time
 import traceback
 import textwrap
 import requests
@@ -673,39 +674,71 @@ def run(ctx, program, args, id, dir, configs, message, show, cloud):
 @click.argument('args', nargs=-1)
 @display_error
 def search(ctx, program, args):
-    # see how we can query all the runs
-    search_util.query_runs()
-    import sys
-    sys.exit(-1)
+    # os.environ['WANDB_MODE'] = 'run'
+    # run = wandb.init()
+    #
+    # import math # debug
+    #
+    # n_steps = 100
+    # n_rotation = 5
+    # for i in range(n_steps):
+    #     sine = math.sin(2.0 * math.pi * i * n_rotation / n_steps)
+    #     cosine = math.cos(2.0 * math.pi * i * n_rotation / n_steps)
+    #     run.summary['epoch'] = i
+    #     run.summary['sine'] = sine
+    #     run.summary['cosine'] = cosine
+    #     run.history.add({'epoch': i, 'sine': sine, 'cosine': cosine})
+    #     print(run.history)
+    #     time.sleep(1)
+
+    # # see how we can query all the runs
+
+    # import sys
+    # sys.exit(-1)
+
+    # Parameters to the algorithm.
+    # TODO: Make these user-specifiable (maybe in the config yaml).
+    n_parallel_processes = 2 # how many parallel processes to allow
+    sleep_time = 10.0 # seconds between polling the database
+    max_nets = 1 # maximum nets to search through
 
     # Load the yaml file and create a Sampler object to take samples from.
     with open("config-defaults.yaml", 'r') as config_stream:
-        try:
-            config = yaml.load(config_stream)
-            sampler = search_util.Sampler(config)
-        except yaml.YAMLError as exc:
-            print(exc)
+        config = yaml.load(config_stream)
+    sampler = search_util.Sampler(config)
 
-    # get a sample
+    # Iterate through all the processes
+    procs = {}
     try:
-        proc_config = sampler.sample()
-    except search_util.Sampler.NoMoreSamples:
-        print('Exhausted all samples.')
-        import sys
-        sys.exit(-1)
+        for _ in range(max_nets):
+            try:
+                # sample some parameters and launch a subprocess
+                proc_config = sampler.sample()
+                uid, proc = \
+                    search_util.run_wandb_subprocess(program, proc_config)
+                procs[uid] = proc
 
-    # run the subprocess, killing it if I see a ctrl-c
-    try:
-        proc = search_util.run_wandb_subprocess(program, proc_config)
-        proc.wait()
+                # poll to see how things are going
+                for ii in range(5):
+                    status = search_util.query_runs(procs.keys())
+                    print('status %s:\n%s' % (ii, status))
+                    time.sleep(10.0)
+                print('Ok. Time to jump ship.')
+                break
+            except search_util.Sampler.NoMoreSamples:
+                print('Exhausted all samples.')
+                break
     except KeyboardInterrupt:
         print('\nGot a keyboard interrupt.')
     finally:
-        proc.kill()
-
-    # all done
-    import sys
-    sys.exit(-1)
+        # Clean up all subprocesses.
+        for uid, proc in procs.items():
+            if proc.poll() is None:
+                proc.kill()
+                print('Subprocess %s killed.' % uid)
+            else:
+                print('Subprocess %s already complete.' % uid)
+        print('Killed all subprocesses.')
 
 #@cli.group()
 #@click.pass_context

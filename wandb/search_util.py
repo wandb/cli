@@ -4,8 +4,10 @@ which Adro wrote.
 """
 
 import copy
+import json
 import os
 import random
+import re
 import subprocess
 import threading
 import uuid
@@ -148,15 +150,62 @@ def run_wandb_subprocess(program, config):
     cmd = ['wandb', 'run', '--configs', config_filename, '--id', uid, program]
     print('Running "%s".' % ' '.join(cmd))
     proc = subprocess.Popen(cmd, stdout=proc_stdout, stderr=proc_stderr)
-    return proc
+    return (uid, proc)
 
-def query_runs():
+def query_runs(uids):
     """
-    Figures out all the runs in the current project.
+    Gets the following information the runs with specified ids = [id1, id2, ...]
+    {
+        id1: {
+            'state': <string>,
+            'val_loss_history': <list of float>,
+            'summary_val_loss': <float>
+            }
+        id2: ...
+    }
     """
-    # figure out the current project
+    # Load the results into a dictionary
+    results = { uid :
+        {
+            'state': 'not_started',
+            'val_loss_history': [],
+            'summary_val_loss': float('inf')
+        } for uid in uids }
+
+    # Query by parsing the filesystem.
+    # TODO: Do this by reading from the website.
+    wandb_path = 'wandb'
+    wandb_history = 'wandb-history.jsonl'
+    run_paths = os.listdir(wandb_path)
+    for uid in uids:
+        # figure out the path for this run
+        print('uid:', uid)
+        path_filter = re.compile('run-\d{8,8}_\d{6,6}-%s' % uid)
+        run_path = max(filter(path_filter.match, run_paths))
+
+        # parse the runfile
+        history_path = os.path.join(wandb_path, run_path, wandb_history)
+        try:
+            with open(history_path) as history:
+                 results[uid]['val_loss_history'] = [json.loads(line)['val_loss']
+                    for line in history.readlines()]
+        except FileNotFoundError:
+            pass
+
+    # Run a gql query to get this rest of the data.
+    # TODO: Eventually, all data should come this way, but I was having trouble
+    # adding `history` to this query.
     api = wandb_api.Api()
     project = api.settings()['project']
-    list_runs = api.list_runs(project)
-    print('list_runs:\n', list_runs[0])
-    print('list_runs:\n', list_runs[-1])
+    for run in api.list_runs(project):
+        uid = run['name'].strip()
+        if uid in uids:
+            try:
+                results[uid]['state'] = run['state']
+                results[uid]['summary_val_loss'] = \
+                    json.loads(run['summaryMetrics'])['val_loss']
+            except KeyError:
+                pass
+
+    # All done
+    return results

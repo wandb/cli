@@ -273,12 +273,14 @@ class Api(object):
         query = gql('''
         query Buckets($model: String!, $entity: String!) {
             model(name: $model, entityName: $entity) {
-                buckets(first: 10) {
+                buckets(first: 1000) {
                     edges {
                         node {
                             id
                             name
                             description
+                            summaryMetrics
+                            state
                         }
                     }
                 }
