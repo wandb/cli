@@ -181,13 +181,18 @@ class RunStatus:
         # Load the results into a dictionary
         self._runs = { uid :
             {
-                'state': 'not_started',
+                'state': 'finished',
                 'val_loss_history': [],
-                'summary_val_loss': 'not_started'
             } for uid in uids }
 
         # Now load run status from the website.
-        self._query_runs()
+        self._query_runs_filesystem()
+        # self._query_runs_api()
+        self._query_runs_process_tree()
+
+        # display the run status of each uid
+        for uid, data in self._runs.items():
+            print('%s : state=%s' % (uid, data['state']))
 
     def should_be_killed(self, uid):
         """
@@ -200,24 +205,37 @@ class RunStatus:
         """
         Returns true if we should start another run to replace this one.
         """
+        # This should only happen if we haven't spawned this process yet.
         if uid is None:
             return True
-        else:
-            return False
 
-    def summary_val_loss(self, uid):
+        # Replace all finished processes.
+        state = self._runs[uid]['state']
+        if state == 'running':
+            return False
+        elif state == 'finished':
+            return True
+        else:
+            raise RuntimeError('Process state "%s" unrecognized.' % state)
+
+    def min_val_loss(self, uid):
         """
         Returns the best (lowest) validation loss recorded for this run, or 0.0
         if no such loss has yet been recorded.
         """
         if uid is None:
-            return 'none'
+            return 0.0
+        history = self._runs[uid]['val_loss_history']
+        if history:
+            # nonempty list
+            return min(history)
         else:
-            return self._runs[uid]['summary_val_loss']
+            # default return value for empty list
+            return 0.0
 
-    def _query_runs(self):
+    def _query_runs_filesystem(self):
         """
-        Queries the website for run information and loads it into
+        Queries the filesystem for run information and loads it into
         self._runs.
         """
 
@@ -228,7 +246,6 @@ class RunStatus:
         run_paths = os.listdir(wandb_path)
         for uid in self._runs:
             # figure out the path for this run
-            print('uid:', uid)
             path_filter = re.compile('run-\d{8,8}_\d{6,6}-%s' % uid)
             run_path = max(filter(path_filter.match, run_paths))
 
@@ -239,28 +256,51 @@ class RunStatus:
                     self._runs[uid]['val_loss_history'] = \
                         [json.loads(line)['val_loss']
                             for line in history.readlines()]
-                    print('val_loss_history:', self._runs[uid]['val_loss_history'])
-                    print('val_loss_history:', type(self._runs[uid]['val_loss_history']))
-                    print('val_loss_history:', list(map(type, self._runs[uid]['val_loss_history'])))
             except FileNotFoundError:
-                print('Could not find file %s.' % history_path)
+                pass
 
-        # Run a gql query to get this rest of the data.
-        # TODO: Eventually, all data should come this way,
-        # but I was having trouble adding `history` to this query.
-        api = wandb_api.Api()
-        project = api.settings()['project']
-        for run in api.list_runs(project):
-            uid = run['name'].strip()
-            if uid in self._runs:
-                try:
-                    state = run['state']
-                except KeyError:
-                    state = 'unknown'
-                try:
-                    summary_val_loss = \
-                        json.loads(run['summaryMetrics'])['val_loss']
-                except KeyError:
-                    summary_val_loss = 'unknown'
-                self._runs[uid]['state'], self._runs[uid]['summary_val_loss'] =\
-                    state, summary_val_loss
+    def _query_runs_api(self):
+        """
+        Queries the api for run information and loads it into
+        self._runs. This is currently broken
+        """
+        # this is broken and shoudn't be used right now
+        raise NotImplementedError('Fix this method.')
+
+        # api = wandb_api.Api()
+        # project = api.settings()['project']
+        # for run in api.list_runs(project):
+        #     uid = run['name'].strip()
+        #     if uid in self._runs:
+        #         try:
+        #             state = run['state']
+        #         except KeyError:
+        #             state = 'unknown'
+        #         try:
+        #             min_val_loss = \
+        #                 json.loads(run['summaryMetrics'])['val_loss']
+        #         except KeyError:
+        #             min_val_loss = 0.0
+        #         self._runs[uid]['state'], self._runs[uid]['min_val_loss'] =\
+        #             state, min_val_loss
+
+    def _query_runs_process_tree(self):
+        """
+        Queries the process tree for run information and loads it into
+        self._runs. This is currently broken
+        """
+        me = psutil.Process(os.getpid())
+        for child in me.children(recursive=True):
+            try:
+                cmd_line = child.cmdline()
+            except psutil.ZombieProcess:
+                continue
+            try:
+                uid = cmd_line[cmd_line.index('--id') + 1]
+            except ValueError:
+                continue
+            try:
+                self._runs[uid]['state'] = 'running'
+            except KeyError:
+                raise RuntimeError('Subprocess %s is not '
+                    'being tracked properly.' % uid)
