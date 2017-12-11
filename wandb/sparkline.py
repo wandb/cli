@@ -5,7 +5,7 @@ spark_chars = u"▁▂▃▄▅▆▇█"
 
 def sparkify(series):
     u"""Converts <series> to a sparkline string.
-    
+
     Example:
     >>> sparkify([ 0.5, 1.2, 3.5, 7.3, 8.0, 12.5, 13.2, 15.0, 14.2, 11.8, 6.1,
     ... 1.9 ])
@@ -17,7 +17,13 @@ def sparkify(series):
     Raises ValueError if input data cannot be converted to float.
     Raises TypeError if series is not an iterable.
     """
-    series = [ float(i) for i in series ]
+    def safe_float(x):
+        """Converts to float, returning 0.0 if there's a type error."""
+        try:
+            return float(x)
+        except TypeError:
+            return 0.0
+    series = [ safe_float(i) for i in series ]
     minimum = min(series)
     maximum = max(series)
     data_range = maximum - minimum

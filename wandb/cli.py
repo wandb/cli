@@ -695,7 +695,7 @@ def search(ctx, program, args):
 
     # Parameters to the algorithm.
     # TODO: Make these user-specifiable (maybe in the config yaml).
-    n_parallel_processes = 2 # how many parallel processes to allow
+    n_parallel_processes = 3 # how many parallel processes to allow
     sleep_time = 10.0 # seconds between polling the database
     max_nets = 1 # maximum nets to search through
 
@@ -713,7 +713,7 @@ def search(ctx, program, args):
     running_uids = [ None ] * n_parallel_processes
     all_procs = {}
     try:
-        for pseudo_epoch in range(40):
+        for pseudo_epoch in range(60):
             history_stats = {'epoch':pseudo_epoch}
             status = search_util.RunStatus(all_procs.keys())
             for index, uid in enumerate(running_uids):

@@ -174,6 +174,8 @@ class RunStatus:
     referenced by a uid.
     """
 
+    VAL_LOSS_SENTINAL = None
+
     def __init__(self, uids):
         """
         Creates a RunStatus object containting information about the listed IDs.
@@ -220,18 +222,26 @@ class RunStatus:
 
     def min_val_loss(self, uid):
         """
-        Returns the best (lowest) validation loss recorded for this run, or 0.0
-        if no such loss has yet been recorded.
+        Returns the best (lowest) validation loss recorded for this run, or
+        RunStatus.VAL_LOSS_SENTINAL if no such loss has yet been recorded.
         """
         if uid is None:
-            return 0.0
+            return RunStatus.VAL_LOSS_SENTINAL
         history = self._runs[uid]['val_loss_history']
         if history:
             # nonempty list
             return min(history)
         else:
             # default return value for empty list
-            return 0.0
+            return RunStatus.VAL_LOSS_SENTINAL
+
+    def best_stats(self):
+        """
+        Returns the statistics for our best run as a dictionary.
+        """
+        sorted_runs = \
+            sorted([(self.min_val_loss(uid), uid) for uid in self._runs
+                if self.min_val_loss(uid) != RunStatus.VAL_LOSS_SENTINAL])
 
     def _query_runs_filesystem(self):
         """
@@ -280,7 +290,7 @@ class RunStatus:
         #             min_val_loss = \
         #                 json.loads(run['summaryMetrics'])['val_loss']
         #         except KeyError:
-        #             min_val_loss = 0.0
+        #             min_val_loss = RunStatus.VAL_LOSS_SENTINAL
         #         self._runs[uid]['state'], self._runs[uid]['min_val_loss'] =\
         #             state, min_val_loss
 
