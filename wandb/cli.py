@@ -699,9 +699,9 @@ def search(ctx, program, args):
     sleep_time = 10.0 # seconds between polling the database
     max_nets = 1 # maximum nets to search through
 
-    # initialize a wandb run
-    os.environ['WANDB_MODE'] = 'run'
-    run = wandb.init()
+    # # initialize a wandb run
+    # os.environ['WANDB_MODE'] = 'run'
+    # run = wandb.init()
 
     # Load the yaml file and create a Sampler object to take samples from.
     with open("config-defaults.yaml", 'r') as config_stream:
@@ -712,7 +712,7 @@ def search(ctx, program, args):
     running_uids = [ None ] * n_parallel_processes
     all_procs = {}
     try:
-        for _ in range(5):
+        for _ in range(2):
             history_stats = {}
             status = search_util.RunStatus(all_procs.keys())
             for index, uid in enumerate(running_uids):
@@ -732,10 +732,11 @@ def search(ctx, program, args):
                 # save the stats
                 history_stats['val_loss_%i' % index] = \
                     status.summary_val_loss(uid)
-            print('setting history status:', history_status)
-            run.history.add(history_stats)
-            print('Sleeping for 10 seconds.')
-            time.sleep(10.0)
+            # print('setting history status:', history_status)
+            print('history_stats:', history_stats)
+            # run.history.add(history_stats)
+            print('Sleeping for %s seconds.' % sleep_time)
+            time.sleep(sleep_time)
     except search_util.Sampler.NoMoreSamples:
         # FIXME: Need to think through what happens if there are no more
         print('Exhausted all samples.')
@@ -748,7 +749,11 @@ def search(ctx, program, args):
                 print('Subprocess %s will be killed.' % uid)
             else:
                 print('Subprocess %s already complete.' % uid)
-            proc.kill()
+            search_util.kill_wandb_subprocess(proc, program)
+            if proc.poll() is None:
+                print('Subprocess %s IS STILL ALIVE.' % uid)
+            else:
+                print('Subprocess %s IS DEAD.' % uid)
         print('Killed all subprocesses.')
 
 #@cli.group()

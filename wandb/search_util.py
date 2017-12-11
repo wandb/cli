@@ -6,8 +6,10 @@ which Adro wrote.
 import copy
 import json
 import os
+import psutil
 import random
 import re
+import signal
 import subprocess
 import threading
 import uuid
@@ -146,11 +148,25 @@ def run_wandb_subprocess(program, config):
     # write the temporary config file, then run the command
     with open(config_filename, 'w') as config_stream:
         yaml.dump(config, config_stream, default_flow_style=False)
-    print('Created temporary config %s.' % config_filename)
     cmd = ['wandb', 'run', '--configs', config_filename, '--id', uid, program]
     print('Running "%s".' % ' '.join(cmd))
     proc = subprocess.Popen(cmd, stdout=proc_stdout, stderr=proc_stderr)
     return (uid, proc)
+
+def kill_wandb_subprocess(proc, program):
+    """
+    Searches the process tree to find the deepest subprocess and kills that.
+
+    proc    - the wandb run process that's wrapping
+    program - the python program that's being wrapped
+    """
+    try:
+        parent = psutil.Process(proc.pid)
+        for child in parent.children(recursive=True):
+            if child.cmdline() == ['python', program]:
+                os.kill(child.pid, signal.SIGINT)
+    except psutil.NoSuchProcess as exc:
+        print('Process %i already killed:\n%s' % (proc.pid, exc))
 
 class RunStatus:
     """
@@ -167,7 +183,7 @@ class RunStatus:
             {
                 'state': 'not_started',
                 'val_loss_history': [],
-                'summary_val_loss': 0.0,
+                'summary_val_loss': 'not_started'
             } for uid in uids }
 
         # Now load run status from the website.
@@ -194,10 +210,10 @@ class RunStatus:
         Returns the best (lowest) validation loss recorded for this run, or 0.0
         if no such loss has yet been recorded.
         """
-        try:
+        if uid is None:
+            return 'none'
+        else:
             return self._runs[uid]['summary_val_loss']
-        except KeyError:
-            return 0.0
 
     def _query_runs(self):
         """
@@ -220,23 +236,31 @@ class RunStatus:
             history_path = os.path.join(wandb_path, run_path, wandb_history)
             try:
                 with open(history_path) as history:
-                     self._runs[uid]['val_loss_history'] = \
+                    self._runs[uid]['val_loss_history'] = \
                         [json.loads(line)['val_loss']
                             for line in history.readlines()]
+                    print('val_loss_history:', self._runs[uid]['val_loss_history'])
+                    print('val_loss_history:', type(self._runs[uid]['val_loss_history']))
+                    print('val_loss_history:', list(map(type, self._runs[uid]['val_loss_history'])))
             except FileNotFoundError:
-                pass
+                print('Could not find file %s.' % history_path)
 
         # Run a gql query to get this rest of the data.
-        # TODO: Eventually, all data should come this way, but I was having trouble
-        # adding `history` to this query.
+        # TODO: Eventually, all data should come this way,
+        # but I was having trouble adding `history` to this query.
         api = wandb_api.Api()
         project = api.settings()['project']
         for run in api.list_runs(project):
             uid = run['name'].strip()
             if uid in self._runs:
                 try:
-                    self._runs[uid]['state'] = run['state']
-                    self._runs[uid]['summary_val_loss'] = \
+                    state = run['state']
+                except KeyError:
+                    state = 'unknown'
+                try:
+                    summary_val_loss = \
                         json.loads(run['summaryMetrics'])['val_loss']
                 except KeyError:
-                    pass
+                    summary_val_loss = 'unknown'
+                self._runs[uid]['state'], self._runs[uid]['summary_val_loss'] =\
+                    state, summary_val_loss
