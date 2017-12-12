@@ -698,6 +698,7 @@ def search(ctx, program, args):
     n_parallel_processes = 3 # how many parallel processes to allow
     sleep_time = 10.0 # seconds between polling the database
     max_nets = 1 # maximum nets to search through
+    iterations = 10000000 # how long to run
 
     # # initialize a wandb run
     os.environ['WANDB_MODE'] = 'run'
@@ -709,11 +710,13 @@ def search(ctx, program, args):
         config = yaml.load(config_stream)
     sampler = search_util.Sampler(config)
 
+    best_current_val_loss = float('inf')
+
     # Iterate through all the processes
     running_uids = [ None ] * n_parallel_processes
     all_procs = {}
     try:
-        for pseudo_epoch in range(60):
+        for pseudo_epoch in range(iterations):
             history_stats = {'epoch':pseudo_epoch}
             status = search_util.RunStatus(all_procs.keys())
             for index, uid in enumerate(running_uids):
@@ -733,6 +736,11 @@ def search(ctx, program, args):
                 # save the stats
                 history_stats['val_loss_%i' % index] = \
                     status.min_val_loss(uid)
+
+                if status.min_val_loss(uid) and status.min_val_loss(uid) < best_current_val_loss:
+                    best_current_val_loss = status.min_val_loss(uid)
+                    run.summary['Best Loss'] = best_current_val_loss
+
             print('history_stats:', history_stats)
             run.history.add(history_stats)
             print('Sleeping for %s seconds.' % sleep_time)
