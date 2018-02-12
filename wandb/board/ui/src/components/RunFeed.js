@@ -43,9 +43,17 @@ class ValueDisplay extends PureComponent {
         style={{padding: 6}}
         trigger={
           <span className="config">
-            <span className="value">{displayValue(this.props.value)}</span>{' '}
-            {!this.props.justValue && (
-              <span className="key">{this.props.valKey}</span>
+            {this.props.content ? (
+              <span className="value"> {this.props.content} </span>
+            ) : (
+              <span>
+                <span className="value">
+                  {displayValue(this.props.value)}
+                </span>{' '}
+                {!this.props.justValue && (
+                  <span className="key">{this.props.valKey}</span>
+                )}
+              </span>
             )}
           </span>
         }
@@ -347,11 +355,38 @@ class RunFeed extends PureComponent {
                           />
                         </Table.Cell>
                       )}
-                      {this.props.columnNames
-                        .filter(columnName => this.props.columns[columnName])
+                      {(this.props.loading
+                        ? ['Description']
+                        : this.props.columnNames)
+                        .filter(
+                          columnName =>
+                            this.props.loading
+                              ? true
+                              : this.props.columns[columnName],
+                        )
                         .map(columnName => {
                           if (columnName == 'Description') {
                             return this.descriptionCell(run, this.props);
+                          } else if (columnName == 'Sweep') {
+                            return (
+                              <Table.Cell key="stop" collapsing>
+                                {run.sweep && (
+                                  <ValueDisplay
+                                    section="sweep"
+                                    valKey="name"
+                                    value={run.sweep.name}
+                                    content={
+                                      <NavLink
+                                        to={`/${this.props.project
+                                          .entityName}/${this.props.project
+                                          .name}/sweeps/${run.sweep.name}`}>
+                                        {run.sweep.name}
+                                      </NavLink>
+                                    }
+                                  />
+                                )}
+                              </Table.Cell>
+                            );
                           } else if (columnName == 'Ran') {
                             return (
                               <Table.Cell key={columnName} collapsing>
@@ -415,19 +450,6 @@ class RunFeed extends PureComponent {
                                       />
                                     ))}
                                 </div>
-                              </Table.Cell>
-                            );
-                          } else if (columnName == 'Sweep') {
-                            return (
-                              <Table.Cell key="stop" collapsing>
-                                {run.sweep && (
-                                  <NavLink
-                                    to={`/${this.props.project
-                                      .entityName}/${this.props.project
-                                      .name}/sweeps/${run.sweep.name}`}>
-                                    {run.sweep.name}
-                                  </NavLink>
-                                )}
                               </Table.Cell>
                             );
                           } else if (columnName == 'Stop') {

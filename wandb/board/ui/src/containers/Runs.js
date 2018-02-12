@@ -114,7 +114,7 @@ class Runs extends React.Component {
       props.runSelections !== nextProps.runSelections ||
       props.activeView !== nextProps.activeView
     ) {
-      let query = {};
+      let query = queryString.parse(window.location.search) || {};
       if (!_.isEmpty(nextProps.runFilters)) {
         query.filter = _.values(nextProps.runFilters).map(filterToString);
       }
@@ -124,8 +124,9 @@ class Runs extends React.Component {
       if (!_.isNil(nextProps.activeView)) {
         query.activeView = nextProps.activeView;
       }
-      let url = `/${nextProps.match.params.entity}/${nextProps.match.params
-        .model}/runs`;
+      let url = `/${nextProps.match.params.entity}/${
+        nextProps.match.params.model
+      }/runs`;
       if (!_.isEmpty(query)) {
         url += '?' + queryString.stringify(query);
       }
@@ -170,15 +171,33 @@ class Runs extends React.Component {
   }
 
   componentDidMount() {
-    this.props.setColumns({
-      Description: true,
-      Ran: true,
-      Runtime: true,
-    });
+    this.doneLoading = false;
+
     this._setUrl({}, this.props);
   }
 
   componentWillReceiveProps(nextProps) {
+    if (
+      !this.doneLoading &&
+      nextProps.loading === false &&
+      nextProps.runs.length > 0
+    ) {
+      this.doneLoading = true;
+      let defaultColumns = {
+        Description: true,
+        Ran: true,
+        Runtime: true,
+        _ConfigAuto: true,
+        Sweep: _.indexOf(nextProps.columnNames, 'Sweep') !== -1,
+      };
+      let summaryColumns = nextProps.columnNames.filter(col =>
+        _.startsWith(col, 'summary'),
+      );
+      for (var col of summaryColumns) {
+        defaultColumns[col] = true;
+      }
+      this.props.setColumns(defaultColumns);
+    }
     // Setup views loaded from server.
     if (
       (nextProps.views === null || !nextProps.views.runs) &&
@@ -252,20 +271,19 @@ class Runs extends React.Component {
               <p
                 style={{cursor: 'pointer'}}
                 onClick={() =>
-                  this.setState({showFilters: !this.state.showFilters})}>
+                  this.setState({showFilters: !this.state.showFilters})
+                }>
                 <Icon
                   rotated={this.state.showFilters ? null : 'counterclockwise'}
                   name="dropdown"
                 />
                 {_.keys(this.props.runFilters).length == 0 &&
-                _.keys(this.props.runSelections).length == 0 ? (
-                  'Filters / Selections'
-                ) : (
-                  _.keys(this.props.runFilters).length +
-                  ' Filters / ' +
-                  _.keys(this.props.runSelections).length +
-                  ' Selections'
-                )}
+                _.keys(this.props.runSelections).length == 0
+                  ? 'Filters / Selections'
+                  : _.keys(this.props.runFilters).length +
+                    ' Filters / ' +
+                    _.keys(this.props.runSelections).length +
+                    ' Selections'}
               </p>
               <p>
                 {this.props.runs.length} total runs, {this.filteredRuns.length}{' '}
@@ -324,7 +342,8 @@ class Runs extends React.Component {
                   name: this.props.match.params.model,
                   id: this.props.projectID,
                   views: views,
-                })}
+                })
+              }
             />
           </Grid.Column>
           <Grid.Column width={16} style={{zIndex: 2}}>
@@ -384,8 +403,9 @@ function getColumns(runs) {
   ).map(col => 'summary:' + col);
   let sweepColumns =
     runs && runs.findIndex(r => r.sweep) > -1 ? ['Sweep', 'Stop'] : [];
-  return ['Description', 'Ran', 'Runtime', 'Config'].concat(
+  return ['Description'].concat(
     sweepColumns,
+    ['Ran', 'Runtime', 'Config'],
     configColumns,
     ['Summary'],
     summaryColumns,
@@ -410,6 +430,10 @@ function setupKeySuggestions(runs) {
         section: 'run',
         value: suggestion,
       })),
+    },
+    {
+      title: 'sweep',
+      suggestions: [{section: 'sweep', value: 'name'}],
     },
     {
       title: 'config',
