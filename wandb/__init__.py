@@ -14,6 +14,7 @@ except ImportError:  # windows
     fcntl = None
 import json
 import logging
+import time
 import os
 try:
     import pty
@@ -63,6 +64,7 @@ logging.basicConfig(
     filemode="w",
     filename=log_fname,
     level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 
 class Error(Exception):
@@ -79,7 +81,7 @@ from wandb import wandb_types as types
 from wandb import api as wandb_api
 from wandb import config as wandb_config
 from wandb import wandb_run
-
+from wandb import wandb_socket
 # Three possible modes:
 #     'cli': running from "wandb" command
 #     'run': we're a script launched by "wandb run"
@@ -95,8 +97,7 @@ def termlog(string='', newline=True):
                           for s in string.split('\n')])
     else:
         line = ''
-    if os.getenv('WANDB_MODE') != "dryrun":
-        click.echo(line, file=sys.stderr, nl=newline)
+    click.echo(line, file=sys.stderr, nl=newline)
 
 
 def termerror(string):
@@ -108,6 +109,42 @@ def termerror(string):
 def _debugger(*args):
     import pdb
     pdb.set_trace()
+
+
+class Callbacks():
+    @property
+    def Keras(self):
+        from .wandb_keras import WandbKerasCallback
+        return WandbKerasCallback
+
+
+callbacks = Callbacks()
+
+
+class ExitHooks(object):
+    def __init__(self):
+        self.exit_code = 0
+        self.exception = None
+
+    def hook(self):
+        self._orig_exit = sys.exit
+        sys.exit = self.exit
+        sys.excepthook = self.exc_handler
+
+    def exit(self, code=0):
+        self.exit_code = code
+        self._orig_exit(code)
+
+    def exc_handler(self, exc_type, exc, *tb):
+        self.exit_code = 1
+        self.exception = exc
+        if issubclass(exc_type, Error):
+            termerror(str(exc))
+        if issubclass(exc_type, KeyboardInterrupt):
+            self.exit_code = 255
+            traceback.print_exception(exc_type, exc, *tb)
+        else:
+            traceback.print_exception(exc_type, exc, *tb)
 
 
 def _init_headless(api, run, job_type, cloud=True):
@@ -143,17 +180,16 @@ def _init_headless(api, run, job_type, cloud=True):
     env = dict(os.environ)
     run.set_environment(env)
 
+    server = wandb_socket.Server()
+    hooks = ExitHooks()
+    hooks.hook()
+
     stdout_master_fd, stdout_slave_fd = pty.openpty()
     stderr_master_fd, stderr_slave_fd = pty.openpty()
 
     # raw mode so carriage returns etc. don't get added by the terminal driver
     tty.setraw(stdout_master_fd)
     tty.setraw(stderr_master_fd)
-
-    # Socket for knowing the syncer process is ready
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind(('', 0))
-    server.listen(1)
 
     headless_args = {
         'command': 'headless',
@@ -162,7 +198,8 @@ def _init_headless(api, run, job_type, cloud=True):
         'stderr_master_fd': stderr_master_fd,
         'cloud': cloud,
         'job_type': job_type,
-        'port': server.getsockname()[1]
+        'program': program,
+        'port': server.port
     }
     internal_cli_path = os.path.join(
         os.path.dirname(__file__), 'internal_cli.py')
@@ -194,11 +231,15 @@ def _init_headless(api, run, job_type, cloud=True):
         stderr_redirector.redirect()
 
     # Listen on the socket waiting for the wandb process to be ready
-    while True:
-        connection, addr = server.accept()
-        res = connection.recv(128)
-        if len(res) > 0:
-            break
+    server.listen(5)
+
+    def done():
+        server.done(hooks.exit_code)
+        logger.info("Waiting for wandb process to finish")
+        server.listen()
+
+    atexit.register(done)
+
 
 
 # Will be set to the run object for the current run, as returned by
@@ -208,7 +249,7 @@ def _init_headless(api, run, job_type, cloud=True):
 run = None
 
 
-def init(job_type='train'):
+def init(job_type='train', config=None):
     global run
     global __stage_dir__
     # If a thread calls wandb.init() it will get the same Run object as
@@ -234,6 +275,8 @@ def init(job_type='train'):
     run = wandb_run.Run.from_environment_or_defaults()
     run.job_type = job_type
     run.set_environment()
+    if config:
+        run.config.update(config)
     api = wandb_api.Api()
     api.set_current_run_id(run.id)
     if run.mode == 'run':
@@ -253,10 +296,10 @@ def init(job_type='train'):
         if bool(os.environ.get('WANDB_SHOW_RUN')):
             webbrowser.open_new_tab(run.get_url(api))
     elif run.mode == 'dryrun':
-        _init_headless(api, run, job_type, False)
         termlog(
-            'wandb dryrun mode, saving files in %s. Use "wandb run <script>" to save results to the cloud.' % run.dir)
+            'wandb tracking run in %s. Run "wandb board" from this directory to see results.' % run.dir)
         termlog()
+        _init_headless(api, run, job_type, False)
     else:
         termlog(
             'Invalid run mode "%s". Please unset WANDB_MODE to do a dry run or' % run.mode)
@@ -270,4 +313,4 @@ def init(job_type='train'):
     return run
 
 
-__all__ = ['init', 'termlog', 'run', 'types']
+__all__ = ['init', 'termlog', 'run', 'types', 'callbacks']

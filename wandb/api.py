@@ -117,6 +117,8 @@ class Api(object):
         Override the settings here.
     """
 
+    HTTP_TIMEOUT = 10
+
     def __init__(self, default_settings=None, load_settings=True):
         self.default_settings = {
             'section': "default",
@@ -148,6 +150,7 @@ class Api(object):
             transport=RequestsHTTPTransport(
                 headers={'User-Agent': self.user_agent},
                 use_json=True,
+                timeout=self.HTTP_TIMEOUT,
                 auth=("api", self.api_key),
                 url='%s/graphql' % self.settings('base_url')
             )
@@ -209,7 +212,7 @@ class Api(object):
         # The WANDB_DEBUG check ensures tests still work.
         if not os.getenv('WANDB_DEBUG') and not self.settings("project"):
             wandb.termlog('wandb.init() called but system not configured.\n'
-                    'Run "wandb init" or set environment variables to get started')
+                          'Run "wandb init" or set environment variables to get started')
             sys.exit(1)
 
     @property
@@ -588,8 +591,7 @@ class Api(object):
         })
 
         run = query_result['model']['bucket']
-        result = {file['name']
-            : file for file in self._flatten_edges(run['files'])}
+        result = {file['name']                  : file for file in self._flatten_edges(run['files'])}
         return run['id'], result
 
     @normalize_exceptions
@@ -771,7 +773,8 @@ class Api(object):
             heartbeat(input: {
                 id: $id,
                 metrics: $metrics,
-                runState: $runState
+                runState: $runState,
+                serverRunGen: true
             }) {
                 agent {
                     id
@@ -1000,7 +1003,7 @@ class FileStreamApi(object):
 
     TODO: Differentiate between binary/text encoding.
     """
-    Finish = collections.namedtuple('Finish', ('failed'))
+    Finish = collections.namedtuple('Finish', ('exitcode'))
 
     HTTP_TIMEOUT = 10
     RATE_LIMIT_SECONDS = 1
@@ -1069,10 +1072,9 @@ class FileStreamApi(object):
                 posted_anything_time = cur_time
                 util.request_with_retry(self._client.post,
                                         self._endpoint, json={'complete': False, 'failed': False})
-
         # post the final close message. (item is self.Finish instance now)
         util.request_with_retry(self._client.post,
-                                self._endpoint, json={'complete': True, 'failed': bool(finished.failed)})
+                                self._endpoint, json={'complete': True, 'exitcode': int(finished.exitcode)})
 
     def _send(self, chunks):
         # create files dict. dict of <filename: chunks> pairs where chunks is a list of
@@ -1100,13 +1102,13 @@ class FileStreamApi(object):
         """
         self._queue.put(Chunk(filename, data))
 
-    def finish(self, failed):
+    def finish(self, exitcode):
         """Cleans up.
 
         Anything pushed after finish will be dropped.
 
         Args:
-            failed: Set True to to display run failure in UI.
+            exitcode: The exitcode of the watched process.
         """
-        self._queue.put(self.Finish(failed))
+        self._queue.put(self.Finish(exitcode))
         self._thread.join()

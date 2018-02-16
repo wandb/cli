@@ -30,9 +30,10 @@ def headless(args):
     api.set_current_run_id(run.id)
 
     rm = wandb.run_manager.RunManager(
-        api, run, cloud=args['cloud'], job_type=args['job_type'])
+        api, run, cloud=args['cloud'], job_type=args['job_type'],
+        port=args['port'], program=args['program'])
     rm.wrap_existing_process(
-        user_process_pid, stdout_master_fd, stderr_master_fd, port=args['port'])
+        user_process_pid, stdout_master_fd, stderr_master_fd)
 
 
 def agent_run(args):
@@ -52,7 +53,8 @@ def agent_run(args):
         root = os.path.abspath(os.getcwd())
         remote_url = 'file://%s%s' % (host, root)
 
-    upsert_result = api.upsert_run(name=run.id,
+    upsert_result = api.upsert_run(id=run.storage_id,
+                                   name=run.id,
                                    project=api.settings("project"),
                                    entity=api.settings("entity"),
                                    config=run.config.as_dict(), description=run.description, host=host,

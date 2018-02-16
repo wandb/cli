@@ -7,6 +7,7 @@ import socket
 import getpass
 import urllib
 import hashlib
+from six.moves import urllib
 from datetime import datetime
 from dateutil.parser import parse
 
@@ -92,6 +93,24 @@ class Events(Base):
         self.name = "wandb-events.jsonl"
 
 
+class Log(Base):
+    def __init__(self, base_path):
+        super(Log, self).__init__(base_path)
+        self.name = "output.log"
+
+    def lines(self):
+        from wandb.board.app.graphql.schema import LogLine
+        lines = []
+        for i, line in enumerate(self.read().split("\n")):
+            lines.append(LogLine(
+                line=line,
+                number=i,
+                id=i,
+                level="error" if line.startswith("ERROR") else "info"
+            ))
+        return lines
+
+
 class Meta(Summary):
     def __init__(self, base_path):
         super(Meta, self).__init__(base_path)
@@ -138,8 +157,10 @@ class Dir(Base):
         size = 40
         if self.meta.get("email"):
             gravatar_url = "https://www.gravatar.com/avatar/" + \
-                hashlib.md5(self.meta["email"].lower()).hexdigest() + "?"
-            gravatar_url += urllib.urlencode({'d': default, 's': str(size)})
+                hashlib.md5(self.meta["email"].lower().encode(
+                    "utf8")).hexdigest() + "?"
+            gravatar_url += urllib.parse.urlencode(
+                {'d': default, 's': str(size)})
             return gravatar_url
         else:
             return default

@@ -47,9 +47,7 @@ class ValueDisplay extends PureComponent {
               <span className="value"> {this.props.content} </span>
             ) : (
               <span>
-                <span className="value">
-                  {displayValue(this.props.value)}
-                </span>{' '}
+                <span className="value">{displayValue(this.props.value)}</span>{' '}
                 {!this.props.justValue && (
                   <span className="key">{this.props.valKey}</span>
                 )}
@@ -123,7 +121,7 @@ class RunFeed extends PureComponent {
   stateToIcon(state) {
     let icon = 'check',
       color = 'green';
-    if (state === 'failed') {
+    if (state === 'failed' || state === 'crashed') {
       icon = 'remove';
       color = 'red';
     } else if (state === 'killed') {
@@ -240,13 +238,12 @@ class RunFeed extends PureComponent {
               <Item.Content>
                 <Item.Header>
                   <NavLink
-                    to={`/${props.project.entityName}/${props.project
-                      .name}/runs/${edge.name}`}>
-                    {edge.description || edge.name ? (
-                      (edge.description || edge.name).split('\n')[0]
-                    ) : (
-                      ''
-                    )}{' '}
+                    to={`/${props.project.entityName}/${
+                      props.project.name
+                    }/runs/${edge.name}`}>
+                    {edge.description || edge.name
+                      ? (edge.description || edge.name).split('\n')[0]
+                      : ''}{' '}
                     {this.stateToIcon(edge.state)}
                   </NavLink>
                 </Item.Header>
@@ -274,6 +271,10 @@ class RunFeed extends PureComponent {
       runsLength = this.props.runs && this.props.runs.length,
       startIndex = (this.props.currentPage - 1) * this.props.limit,
       endIndex = Math.min(startIndex + this.props.limit, runsLength),
+      longestColumn =
+        Object.assign([], this.props.columnNames).sort(
+          (a, b) => b.length - a.length,
+        )[0] || '',
       runs =
         this.props.runs && this.props.runs.length > 0 && !this.props.loading
           ? this.props.runs.slice(startIndex, endIndex)
@@ -292,7 +293,10 @@ class RunFeed extends PureComponent {
             unstackable
             size="small">
             <Table.Header>
-              <Table.Row>
+              <Table.Row
+                style={{
+                  height: longestColumn.length * 6,
+                }}>
                 {this.props.selectable && <Table.HeaderCell />}
                 {this.props.columnNames
                   .filter(columnName => this.props.columns[columnName])
@@ -301,11 +305,9 @@ class RunFeed extends PureComponent {
                       key={columnName}
                       className={
                         _.startsWith(columnName, 'config:') ||
-                        _.startsWith(columnName, 'summary:') ? (
-                          'rotate'
-                        ) : (
-                          ''
-                        )
+                        _.startsWith(columnName, 'summary:')
+                          ? 'rotate'
+                          : ''
                       }
                       style={{textAlign: 'center', verticalAlign: 'bottom'}}
                       onClick={() => {
@@ -321,11 +323,9 @@ class RunFeed extends PureComponent {
                       <div>
                         <span>
                           {_.startsWith(columnName, 'config:') ||
-                          _.startsWith(columnName, 'summary:') ? (
-                            columnName.split(':')[1]
-                          ) : (
-                            columnName
-                          )}
+                          _.startsWith(columnName, 'summary:')
+                            ? columnName.split(':')[1]
+                            : columnName}
                           {this.props.sort.name == columnName &&
                             (this.props.sort.ascending ? (
                               <Icon name="caret up" />
@@ -351,13 +351,15 @@ class RunFeed extends PureComponent {
                           <Checkbox
                             checked={!!this.props.selectedRuns[run.name]}
                             onChange={() =>
-                              this.props.toggleRunSelection(run.name, run.id)}
+                              this.props.toggleRunSelection(run.name, run.id)
+                            }
                           />
                         </Table.Cell>
                       )}
                       {(this.props.loading
                         ? ['Description']
-                        : this.props.columnNames)
+                        : this.props.columnNames
+                      )
                         .filter(
                           columnName =>
                             this.props.loading
@@ -377,9 +379,11 @@ class RunFeed extends PureComponent {
                                     value={run.sweep.name}
                                     content={
                                       <NavLink
-                                        to={`/${this.props.project
-                                          .entityName}/${this.props.project
-                                          .name}/sweeps/${run.sweep.name}`}>
+                                        to={`/${
+                                          this.props.project.entityName
+                                        }/${this.props.project.name}/sweeps/${
+                                          run.sweep.name
+                                        }`}>
                                         {run.sweep.name}
                                       </NavLink>
                                     }
@@ -403,7 +407,8 @@ class RunFeed extends PureComponent {
                                       return Date.parse(run.heartbeatAt + 'Z');
                                     }}
                                     formatter={(v, u, s, d, f) =>
-                                      f().replace(s, '')}
+                                      f().replace(s, '')
+                                    }
                                     live={false}
                                   />
                                 )}

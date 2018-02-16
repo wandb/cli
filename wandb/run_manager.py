@@ -7,7 +7,7 @@ import stat
 import subprocess
 import sys
 import time
-import traceback
+import re
 from tempfile import NamedTemporaryFile
 from watchdog.observers import Observer
 from watchdog.events import PatternMatchingEventHandler
@@ -29,9 +29,14 @@ from wandb import stats
 from wandb import streaming_log
 from wandb import util
 from wandb import wandb_run
+from wandb import wandb_socket
 from wandb import meta
+import wandb.api
 from .api import BinaryFilePolicy, CRDedupeFilePolicy
 logger = logging.getLogger(__name__)
+
+
+OUTPUT_FNAME = 'output.log'
 
 
 class FileTailer(object):
@@ -153,8 +158,24 @@ class FileEventHandlerBinaryStream(FileEventHandler):
         self._tailer = FileTailer(self.file_path, on_read, binary=True)
 
 
+class WriteSerializingFile(object):
+    """Wrapper for a file object that serializes writes.
+    """
+
+    def __init__(self, f):
+        self.lock = threading.Lock()
+        self.f = f
+
+    def write(self, *args, **kargs):
+        self.lock.acquire()
+        try:
+            self.f.write(*args, **kargs)
+        finally:
+            self.lock.release()
+
+
 class Process(object):
-    """Class representing a running process with an interface that
+    """Represents a running process with an interface that
     mimics Popen's.
 
     Only works on Unix-y systems.
@@ -203,10 +224,11 @@ class RunManager(object):
     """Manages a run's process, wraps its I/O, and synchronizes its files.
     """
 
-    def __init__(self, api, run, project=None, tags=[], cloud=True, job_type="train"):
+    def __init__(self, api, run, project=None, tags=[], cloud=True, job_type="train", port=None, program=None):
         self._api = api
         self._run = run
         self._cloud = cloud
+        self._port = port
 
         self._project = project if project else api.settings("project")
         self._tags = tags
@@ -229,6 +251,8 @@ class RunManager(object):
         self._system_stats = stats.SystemStats(run)
         self._meta = meta.Meta(api, self._run.dir)
         self._meta.data["jobType"] = job_type
+        if program:
+            self._meta.data["program"] = program
 
         def push_function(save_name, path):
             with open(path, 'rb') as f:
@@ -240,8 +264,15 @@ class RunManager(object):
 
         self._handler._patterns = [
             os.path.join(self._watch_dir, os.path.normpath('*'))]
-        # Ignore hidden files/folders
-        self._handler._ignore_patterns = ['*/.*', '*.tmp']
+        # Ignore hidden files/folders and output.log because we stream it specially
+        self._handler._ignore_patterns = [
+            '*/.*',
+            '*.tmp',
+            os.path.join(self._run.dir, OUTPUT_FNAME)
+        ]
+
+        self._socket = wandb_socket.Client(self._port)
+
         if self._cloud:
             self._observer.start()
 
@@ -252,23 +283,10 @@ class RunManager(object):
             wandb.termlog()
 
             self._api.get_file_stream_api().set_file_policy(
-                'output.log', CRDedupeFilePolicy())
-            # Tee stdout/stderr into our TextOutputStream, which will push lines to the cloud.
-            self._stdout_stream = streaming_log.TextStreamPusher(
-                self._api.get_file_stream_api(), 'output.log', prepend_timestamp=True)
-            self._stderr_stream = streaming_log.TextStreamPusher(
-                self._api.get_file_stream_api(), 'output.log', line_prepend='ERROR',
-                prepend_timestamp=True)
-        else:
-            self._stdout_stream = open(self._run.dir + "/output.log", "w")
-            self._stderr_stream = open(self._run.dir + "/output.log", "w")
+                OUTPUT_FNAME, CRDedupeFilePolicy())
 
-    def run_user_process(self, program, args, env):
-        """Launch a user process, capture its output, and sync its files to the backend.
-
-        This returns after the process has ended and syncing is done.
-        Captures ctrl-c's, signals, etc.
-        """
+    def _get_stdout_stderr_streams(self):
+        """Sets up STDOUT and STDERR streams. Only call this once."""
         if six.PY2:
             stdout = sys.stdout
             stderr = sys.stderr
@@ -276,17 +294,69 @@ class RunManager(object):
             stdout = sys.stdout.buffer.raw
             stderr = sys.stderr.buffer.raw
 
+        output_log_path = os.path.join(self._run.dir, OUTPUT_FNAME)
+        self._output_log = WriteSerializingFile(open(output_log_path, 'wb'))
+
+        stdout_streams = [stdout, self._output_log]
+        stderr_streams = [stderr, self._output_log]
+
+        if self._cloud:
+            # Tee stdout/stderr into our TextOutputStream, which will push lines to the cloud.
+            fs_api = self._api.get_file_stream_api()
+            self._stdout_stream = streaming_log.TextStreamPusher(
+                fs_api, OUTPUT_FNAME, prepend_timestamp=True)
+            self._stderr_stream = streaming_log.TextStreamPusher(
+                fs_api, OUTPUT_FNAME, line_prepend='ERROR',
+                prepend_timestamp=True)
+
+            stdout_streams.append(self._stdout_stream)
+            stderr_streams.append(self._stderr_stream)
+
+        return stdout_streams, stderr_streams
+
+    def _close_stdout_stderr_streams(self, exitcode):
+        self._output_log.f.close()
+        self._output_log = None
+
+        # Close output-capturing stuff. This also flushes anything left in the buffers.
+        if self._stdout_tee.tee_file is not None:
+            # we don't have tee_file's in headless mode
+            self._stdout_tee.tee_file.close()
+            # TODO(adrian): we should close these even in headless mode
+            # but in python 2 the read thread doesn't stop on its own
+            # for some reason
+            self._stdout_tee.close_join()
+        if self._stderr_tee.tee_file is not None:
+            self._stderr_tee.tee_file.close()
+            self._stderr_tee.close_join()
+
+        if self._cloud:
+            # not set in dry run mode
+            self._stdout_stream.close()
+            self._stderr_stream.close()
+            self._api.get_file_stream_api().finish(exitcode)
+
+    def run_user_process(self, program, args, env):
+        """Launch a user process, capture its output, and sync its files to the backend.
+
+        This returns after the process has ended and syncing is done.
+        Captures ctrl-c's, signals, etc.
+        """
+
+        stdout_streams, stderr_streams = self._get_stdout_stderr_streams()
+
         if sys.platform == "win32":
             # PTYs don't work in windows so we use pipes.
-            self._stdout_tee = io_wrap.Tee.pipe(stdout, self._stdout_stream)
-            self._stderr_tee = io_wrap.Tee.pipe(stderr, self._stderr_stream)
+            self._stdout_tee = io_wrap.Tee.pipe(*stdout_streams)
+            self._stderr_tee = io_wrap.Tee.pipe(*stderr_streams)
+            # Seems like the following actually isn't necessary on Windows
             # TODO(adrian): we may need to do the following if we use pipes instead of PTYs
             # because Python on Unix doesn't like writing UTF-8 to files
             # tell child python interpreters we accept utf-8
             # env['PYTHONIOENCODING'] = 'UTF-8'
         else:
-            self._stdout_tee = io_wrap.Tee.pty(stdout, self._stdout_stream)
-            self._stderr_tee = io_wrap.Tee.pty(stderr, self._stderr_stream)
+            self._stdout_tee = io_wrap.Tee.pty(*stdout_streams)
+            self._stderr_tee = io_wrap.Tee.pty(*stderr_streams)
 
         self._stdout_stream.write_string(" ".join(psutil.Process(
             os.getpid()).cmdline()) + "\n\n")
@@ -314,32 +384,20 @@ class RunManager(object):
         This returns after the process has ended and syncing is done.
         Captures ctrl-c's, signals, etc.
         """
-        if six.PY2:
-            stdout = sys.stdout
-            stderr = sys.stderr
-        else:  # we write binary so grab the raw I/O objects in python 3
-            stdout = sys.stdout.buffer.raw
-            stderr = sys.stderr.buffer.raw
-
         stdout_read_file = os.fdopen(stdout_read_fd, 'rb')
         stderr_read_file = os.fdopen(stderr_read_fd, 'rb')
-        self._stdout_tee = io_wrap.Tee(
-            stdout_read_file, stdout, self._stdout_stream)
-        self._stderr_tee = io_wrap.Tee(
-            stderr_read_file, stderr, self._stderr_stream)
+        stdout_streams, stderr_streams = self._get_stdout_stderr_streams()
+        self._stdout_tee = io_wrap.Tee(stdout_read_file, *stdout_streams)
+        self._stderr_tee = io_wrap.Tee(stderr_read_file, *stderr_streams)
 
         self.proc = Process(pid)
 
         # Signal the main process that we're all hooked up
-        if port:
-            client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client.connect(('', port))
-            client.sendall('ready')
+        self._socket.ready()
 
-        print
-        self._sync_etc()
+        self._sync_etc(headless=True)
 
-    def _sync_etc(self):
+    def _sync_etc(self, headless=False):
         # Ignore SIGQUIT (ctrl-\). The child process will # handle it, and we'll
         # exit when the child process does.
         #
@@ -350,42 +408,45 @@ class RunManager(object):
         except AttributeError:  # SIGQUIT doesn't exist on windows
             pass
 
+        exitcode = None
         try:
-            exitcode = self.proc.wait()
-            self._meta.data["exitcode"] = self.proc.returncode
-            self._meta.data["state"] = "finished" if self.proc.returncode == 0 else "failed"
-            self._meta.write()
+            while True:
+                res = bytearray()
+                try:
+                    res = self._socket.recv(2)
+                except socket.timeout:
+                    pass
+                if len(res) == 2 and res[0] == 2:
+                    exitcode = res[1]
+                    break
+                elif len(res) > 0:
+                    wandb.termerror(
+                        "Invalid message received from child process: %s" % str(res).encode("hex"))
+                    break
+                else:
+                    exitcode = self.proc.poll()
+                    if exitcode is not None:
+                        break
+                    time.sleep(1)
         except KeyboardInterrupt:
+            exitcode = 255
             wandb.termlog('Ctrl-c pressed; waiting for program to end.')
             keyboard_interrupt_time = time.time()
-            # give the process a couple of seconds to die, then kill it
-            while self.proc.poll() is None and (time.time() - keyboard_interrupt_time) < 2:
-                time.sleep(0.1)
-            if self.proc.poll() is None:
-                wandb.termlog('Program still alive. Killing it.')
-                try:
-                    self.proc.kill()
-                except OSError:
-                    pass
-            self._meta.data["state"] = "killed"
+            if not headless:
+                # give the process a couple of seconds to die, then kill it
+                while self.proc.poll() is None and (time.time() - keyboard_interrupt_time) < 2:
+                    time.sleep(0.1)
+                if self.proc.poll() is None:
+                    wandb.termlog('Program still alive. Killing it.')
+                    try:
+                        self.proc.kill()
+                    except OSError:
+                        pass
 
-        # Close output-capturing stuff. This also flushes anything left in the buffers.
-        if self._stdout_tee.tee_file is not None:
-            # we don't have tee_file's in headless mode
-            self._stdout_tee.tee_file.close()
-            # TODO(adrian): we should close these even in headless mode
-            # but in python 2 the read thread doesn't stop on its own
-            # for some reason
-            self._stdout_tee.close_join()
-        if self._stderr_tee.tee_file is not None:
-            self._stderr_tee.tee_file.close()
-            self._stderr_tee.close_join()
-        self._stdout_stream.close()
-        self._stderr_stream.close()
-        if self._cloud:
-            self._api.get_file_stream_api().finish(self.proc.returncode == 0)
+        self._close_stdout_stderr_streams(exitcode or 254)
 
-        """
+        """TODO(adrian): garbage that appears in the logs sometimes
+
         Exception ignored in: <bound method Popen.__del__ of <subprocess.Popen object at 0x111adce48>>
         Traceback (most recent call last):
           File "/Users/adrian/.pyenv/versions/3.6.0/Python.framework/Versions/3.6/lib/python3.6/subprocess.py", line 760, in __del__
@@ -393,25 +454,31 @@ class RunManager(object):
         """
         wandb.termlog()
 
-        if self.proc.poll() is None:
+        if exitcode is None:
+            exitcode = 254
             wandb.termlog(
                 'Killing program failed; syncing files anyway. Press ctrl-c to abort syncing.')
         else:
-            self._meta.data["exitcode"] = self.proc.returncode
-            if self.proc.returncode == 0:
+            if exitcode == 0:
                 wandb.termlog('Program ended.')
-                self._meta.data["state"] = self._meta.data["state"] or "finished"
             else:
-                self._meta.data["state"] = self._meta.data["state"] or "failed"
                 wandb.termlog(
-                    'Program failed with code %d. Press ctrl-c to abort syncing.' % self.proc.returncode)
+                    'Program failed with code %d. Press ctrl-c to abort syncing.' % exitcode)
         #termlog('job (%s) Process exited with code: %s' % (program, exitcode))
 
-        self._system_stats.shutdown()
+        self._meta.data["exitcode"] = exitcode
+        if exitcode == 0:
+            self._meta.data["state"] = "finished"
+        elif exitcode == 255:
+            self._meta.data["state"] = "killed"
+        else:
+            self._meta.data["state"] = "failed"
         self._meta.shutdown()
+        self._system_stats.shutdown()
 
         # If we're not syncing to the cloud, we're done
         if not self._cloud:
+            self._socket.done()
             return None
 
         # Show run summary/history
@@ -495,7 +562,7 @@ class RunManager(object):
             download_urls = self._api.download_urls(
                 self._project, run=self._run.id)
             for fname, info in download_urls.items():
-                if fname == 'wandb-history.h5' or 'output.log':
+                if fname == 'wandb-history.h5' or OUTPUT_FNAME:
                     continue
                 local_path = os.path.join(self._watch_dir, fname)
                 local_md5 = util.md5_file(local_path)
@@ -520,6 +587,9 @@ class RunManager(object):
             wandb.termerror('Sync failed %s' % self.url)
         else:
             wandb.termlog('Synced %s' % self.url)
+
+        if headless:
+            self._socket.done()
 
     def _get_handler(self, file_path, save_name):
         self._stats.update_file(file_path)
