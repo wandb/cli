@@ -155,8 +155,12 @@ export const RUN_UPSERT = gql`
 `;
 
 export const MODIFY_RUNS = gql`
-  mutation modifyRuns($ids: [String], $addTags: [String]) {
-    modifyRuns(input: {ids: $ids, addTags: $addTags}) {
+  mutation modifyRuns(
+    $ids: [String]
+    $tags: [String]
+    $operation: Boolean = true
+  ) {
+    modifyRuns(input: {ids: $ids, tags: $tags, operation: $operation}) {
       runs {
         ...BasicRunFragment
         user {

@@ -90,7 +90,7 @@ class RunEditor extends React.Component {
                       this.setState({
                         canSubmit: true,
                         tags: _.sortedUniq(
-                          _.concat(this.state.tags, this.state.newTag),
+                          _.concat(this.state.tags, this.state.newTag)
                         ),
                         newTag: '',
                       });

@@ -70,7 +70,7 @@ class ValueDisplay extends PureComponent {
                     icon="external square"
                     onClick={() => {
                       this.props.enableColumn(
-                        this.props.section + ':' + this.props.valKey,
+                        this.props.section + ':' + this.props.valKey
                       );
                     }}
                   />
@@ -95,7 +95,7 @@ class ValueDisplay extends PureComponent {
                       'filter',
                       filterKey,
                       '=',
-                      sortableValue(this.props.value),
+                      sortableValue(this.props.value)
                     );
                   }}
                 />
@@ -262,9 +262,10 @@ class RunFeedRow extends React.Component {
                         'filter',
                         {section: 'tags', name: tag},
                         '=',
-                        true,
+                        true
                       )
                     }
+                    removeTag={tag => this.props.removeTag(edge.id, tag)}
                   />
                 </Item.Extra>
                 {admin && <Launcher runId={edge.id} runName={edge.name} />}
@@ -410,6 +411,14 @@ class RunFeed extends PureComponent {
     });
   }
 
+  removeTag = (id, tag) => {
+    this.props.modifyRuns({
+      ids: [id],
+      tags: [tag],
+      operation: false,
+    });
+  };
+
   render() {
     let /*stats =
         this.props.project &&
@@ -422,12 +431,12 @@ class RunFeed extends PureComponent {
           ? this.props.runs.slice(startIndex, endIndex)
           : this.tablePlaceholders(
               this.props.limit,
-              this.props.project.bucketCount,
+              this.props.project.bucketCount
             ),
       columnNames = this.props.loading
         ? ['Description']
         : this.props.columnNames.filter(
-            columnName => this.props.columns[columnName],
+            columnName => this.props.columns[columnName]
           );
     if (!this.props.loading && runsLength === 0) {
       return <div>No runs match the chosen filters.</div>;
@@ -468,10 +477,11 @@ class RunFeed extends PureComponent {
                           key,
                           op,
                           value,
-                        }),
+                        })
                       )
                     }
                     setFilters={this.props.setFilters}
+                    removeTag={this.removeTag}
                   />
                 ))}
             </Table.Body>

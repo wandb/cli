@@ -2,7 +2,6 @@ import React from 'react';
 import {graphql, compose, withApollo} from 'react-apollo';
 import {
   Checkbox,
-  Confirm,
   Container,
   Dropdown,
   Button,
@@ -15,9 +14,10 @@ import {
 import RunFeed from '../components/RunFeed';
 import RunFiltersRedux from './RunFiltersRedux';
 import RunColumnsSelector from '../components/RunColumnsSelector';
+import RunTagManager from '../components/RunTagManager';
 import ViewModifier from './ViewModifier';
 import HelpIcon from '../components/HelpIcon';
-import {MODIFY_RUNS} from '../graphql/runs';
+import {MODIFY_RUNS, RUN_UPSERT} from '../graphql/runs';
 import {MODEL_UPSERT} from '../graphql/models';
 import {connect} from 'react-redux';
 import queryString from 'query-string';
@@ -190,17 +190,15 @@ class Runs extends React.Component {
     this.setState({activeTab: activeIndex});
 
   render() {
+    let tags = [];
     let ModelInfo = this.props.ModelInfo;
     const filterCount = Filter.countIndividual(this.props.runFilters);
+    this.props.data.base.forEach(item => {
+      tags = [...tags, ...item.tags];
+    });
+    tags = [...new Set(tags)];
     return (
       <div>
-        <Confirm
-          open={this.state.showConfirm}
-          onCancel={this.state.handleCancel}
-          onConfirm={this.state.handleConfirm}
-          content={this.state.confirmText}
-          confirmButton={this.state.confirmButton}
-        />
         <Grid>
           <Grid.Row divided columns={2}>
             <Grid.Column>{ModelInfo}</Grid.Column>
@@ -314,45 +312,6 @@ class Runs extends React.Component {
                 onClick={() => this.props.addView('runs', 'New View', [])}
               />
             )}
-            <Button
-              floated="right"
-              disabled={this.props.data.selectedRuns.length === 0}
-              onClick={e => {
-                // TODO(adrian): this should probably just be a separate component
-                e.preventDefault();
-
-                this.setState({
-                  showConfirm: true,
-                  confirmText:
-                    'Are you sure you would like to hide these runs? You can reverse this later by removing the "hidden" label.',
-                  confirmButton: `Hide ${
-                    this.props.data.selectedRuns.length
-                  } run(s)`,
-                  handleConfirm: e => {
-                    e.preventDefault();
-                    this.props.modifyRuns({
-                      ids: this.props.data.selectedRuns.map(run => run.id),
-                      addTags: ['hidden'],
-                    });
-                    this.setState({
-                      showConfirm: false,
-                      handleConfirm: null,
-                      handleCancel: null,
-                    });
-                  },
-                  handleCancel: e => {
-                    e.preventDefault();
-                    this.setState({
-                      showConfirm: false,
-                      handleConfirm: null,
-                      handleCancel: null,
-                    });
-                  },
-                });
-              }}>
-              <Icon name="hide" />
-              Hide {this.props.data.selectedRuns.length} run(s)
-            </Button>
             <Dropdown
               icon={null}
               trigger={
@@ -396,6 +355,11 @@ class Runs extends React.Component {
                 </Dropdown.Item>
               </Dropdown.Menu>
             </Dropdown>
+            <RunTagManager
+              selectedRuns={this.props.data.selectedRuns}
+              modifyRuns={this.props.modifyRuns}
+              tags={tags}
+            />
             {/* <p style={{float: 'right'}}>
               Select
               <a>all</a>
@@ -414,6 +378,7 @@ class Runs extends React.Component {
           selectedRuns={this.props.data.selectedRunsById}
           columnNames={this.props.data.columnNames}
           limit={this.props.limit}
+          modifyRuns={this.props.modifyRuns}
         />
       </div>
     );
@@ -440,6 +405,21 @@ const withMutations = compose(
       modifyRuns: variables => {
         mutate({
           variables: {...variables},
+        });
+      },
+    }),
+  }),
+  graphql(RUN_UPSERT, {
+    props: ({mutate}) => ({
+      updateRun: variables => {
+        return mutate({
+          variables: {...variables},
+          updateQueries: {
+            Model: (prev, {mutationResult}) => {
+              const bucket = mutationResult.data.upsertBucket.bucket;
+              return update(prev, {model: {bucket: {$set: bucket}}});
+            },
+          },
         });
       },
     }),
