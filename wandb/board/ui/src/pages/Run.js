@@ -10,6 +10,7 @@ import {
   RUN_DELETION,
   RUN_STOP,
   RUNS_QUERY,
+  MODIFY_RUNS,
   fragments,
 } from '../graphql/runs';
 import {bindActionCreators} from 'redux';
@@ -111,6 +112,7 @@ class Run extends React.Component {
                 views: views,
               })
             }
+            modifyRuns={this.props.modifyRuns}
           />
         )}
       </div>
@@ -200,6 +202,15 @@ const withMutations = compose(
             },
           },
         }),
+    }),
+  }),
+  graphql(MODIFY_RUNS, {
+    props: ({mutate}) => ({
+      modifyRuns: variables => {
+        mutate({
+          variables: {...variables},
+        });
+      },
     }),
   })
 );

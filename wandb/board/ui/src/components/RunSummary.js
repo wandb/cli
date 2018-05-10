@@ -80,7 +80,7 @@ class RunSummary extends Component {
           content={body.length > 0 && <Markdown content={body} />}
           color={this.color()}
         />
-        <Segment attached="bottom">
+        <Segment attached="bottom" className="overview">
           <Grid>
             <Grid.Row>
               <Grid.Column width={8}>
@@ -117,12 +117,17 @@ class RunSummary extends Component {
                 )}
               </Grid.Column>
               <Grid.Column width={8} textAlign="right">
-                {bucket.tags &&
-                  bucket.tags.length > 0 && (
-                    <span>
-                      tags <Tags tags={bucket.tags} />{' '}
-                    </span>
-                  )}
+                {bucket.tags && (
+                  <span>
+                    {bucket.tags.length > 0 && 'tags '}
+                    <Tags
+                      id={bucket.id}
+                      options={[]}
+                      tags={bucket.tags}
+                      modifyRuns={this.props.modifyRuns}
+                    />{' '}
+                  </span>
+                )}
                 run{' '}
                 <NavLink
                   to={`/${model.entityName}/${model.name}/runs/${bucket.name}`}>

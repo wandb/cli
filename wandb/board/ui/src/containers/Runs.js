@@ -196,7 +196,9 @@ class Runs extends React.Component {
     this.props.data.base.forEach(item => {
       tags = [...tags, ...item.tags];
     });
-    tags = [...new Set(tags)];
+    tags = [...new Set(tags)].map(item => {
+      return {text: item, value: item};
+    });
     return (
       <div>
         <Grid>
@@ -379,6 +381,7 @@ class Runs extends React.Component {
           columnNames={this.props.data.columnNames}
           limit={this.props.limit}
           modifyRuns={this.props.modifyRuns}
+          tags={tags}
         />
       </div>
     );

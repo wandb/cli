@@ -128,16 +128,3 @@ th.rotate > div > span {
 .ui.toggle.checkbox label {
   padding-left: 3.5rem !important;
 }
-
-td.overview .ui.button.filter {
-  border-radius: 0.29rem;
-}
-td.overview:hover .ui.button.filter {
-  border-radius: 0.29rem 0 0 0.29rem;
-}
-td.overview button.delete {
-  display: none;
-}
-td.overview:hover button.delete {
-  display: block;
-}

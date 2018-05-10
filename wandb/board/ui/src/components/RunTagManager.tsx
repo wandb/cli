@@ -1,66 +1,6 @@
 import * as React from 'react';
-import {Confirm, Button, Icon, Popup, Grid, Dropdown} from 'semantic-ui-react';
-
-interface SelectTagsProps {
-  add: boolean;
-  batchTags(e: any, tags: string[], add: boolean): void;
-  tags?: any;
-}
-
-interface SelectTagsState {
-  options?: any;
-  currentValues?: string[];
-}
-
-class SelectTags extends React.Component<SelectTagsProps, SelectTagsState> {
-  constructor(props: SelectTagsProps) {
-    super(props);
-    this.state = {
-      options: props.tags,
-      currentValues: [],
-    };
-  }
-
-  handleAddition = (e: any, {value}: any): void => {
-    this.setState({
-      options: [{text: value, value}, ...this.state.options],
-    });
-  };
-
-  handleChange = (e: any, {value}: any): void =>
-    this.setState({currentValues: value});
-
-  render() {
-    return (
-      <Button.Group>
-        <Dropdown
-          options={this.state.options}
-          placeholder="Choose tag(s)"
-          search
-          selection
-          button
-          multiple
-          allowAdditions={this.props.add}
-          value={this.state.currentValues}
-          onAddItem={this.handleAddition}
-          onChange={this.handleChange}
-        />
-        <Button
-          type="submit"
-          disabled={
-            !this.state.currentValues || this.state.currentValues.length === 0
-          }
-          onClick={e => {
-            this.state.currentValues &&
-              this.props.batchTags(e, this.state.currentValues, this.props.add);
-            this.setState({currentValues: []});
-          }}>
-          {this.props.add ? 'Add' : 'Remove'}
-        </Button>
-      </Button.Group>
-    );
-  }
-}
+import {Confirm, Button, Icon, Popup, Grid} from 'semantic-ui-react';
+import RunSelectTags from './RunSelectTags';
 
 interface RunTagManagerProps {
   selectedRuns: object[];
@@ -102,10 +42,7 @@ export default class RunTagManager extends React.Component<
 
   componentWillReceiveProps(nextProps: RunTagManagerProps) {
     if (nextProps.tags !== this.props.tags) {
-      let tags = nextProps.tags.map((item: string) => {
-        return {text: item, value: item};
-      });
-      this.setState({options: tags});
+      this.setState({options: nextProps.tags});
     }
   }
 
@@ -117,11 +54,12 @@ export default class RunTagManager extends React.Component<
         isOpen: false,
         showConfirm: true,
         confirmText:
-          'Are you sure you would like to ' +
-          (add ? 'add' : 'remove') +
-          ' `' +
+          (add ? 'Add' : 'Remove') +
+          " '" +
           tags.join(', ') +
-          '` tag(s) to selected runs?',
+          "' tag(s) " +
+          (add ? 'to' : 'from') +
+          ' selected runs?',
         confirmButton:
           (add ? 'Add to' : 'Remove from') +
           ` ${this.props.selectedRuns.length} run(s)`,
@@ -191,7 +129,7 @@ export default class RunTagManager extends React.Component<
               </Grid.Row>
               <Grid.Row>
                 <Grid.Column>
-                  <SelectTags
+                  <RunSelectTags
                     add={true}
                     batchTags={this.batchTags}
                     tags={this.state.options}
@@ -200,7 +138,7 @@ export default class RunTagManager extends React.Component<
               </Grid.Row>
               <Grid.Row>
                 <Grid.Column>
-                  <SelectTags
+                  <RunSelectTags
                     add={false}
                     batchTags={this.batchTags}
                     tags={this.state.options}

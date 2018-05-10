@@ -256,7 +256,9 @@ class RunFeedRow extends React.Component {
                   {/* edge.host && `on ${edge.host} ` */}
                   {/*edge.fileCount + ' files saved' NOTE: to add this back, add fileCount back to RUNS_QUERY*/}
                   <Tags
+                    id={edge.id}
                     tags={edge.tags}
+                    options={this.props.tags}
                     addFilter={tag =>
                       this.props.addFilter(
                         'filter',
@@ -265,7 +267,7 @@ class RunFeedRow extends React.Component {
                         true
                       )
                     }
-                    removeTag={tag => this.props.removeTag(edge.id, tag)}
+                    modifyRuns={this.props.modifyRuns}
                   />
                 </Item.Extra>
                 {admin && <Launcher runId={edge.id} runName={edge.name} />}
@@ -411,14 +413,6 @@ class RunFeed extends PureComponent {
     });
   }
 
-  removeTag = (id, tag) => {
-    this.props.modifyRuns({
-      ids: [id],
-      tags: [tag],
-      operation: false,
-    });
-  };
-
   render() {
     let /*stats =
         this.props.project &&
@@ -481,7 +475,8 @@ class RunFeed extends PureComponent {
                       )
                     }
                     setFilters={this.props.setFilters}
-                    removeTag={this.removeTag}
+                    tags={this.props.tags}
+                    modifyRuns={this.props.modifyRuns}
                   />
                 ))}
             </Table.Body>

@@ -84,7 +84,7 @@ export default class RunViewer extends React.Component {
       })
       .filter(row => row !== null);
     let keys = _.flatMap(data, row =>
-      _.keys(row).filter(key => !row[key] || !row[key]._type),
+      _.keys(row).filter(key => !row[key] || !row[key]._type)
     );
     keys = _.uniq(keys);
     keys = _.sortBy(keys);
@@ -119,6 +119,7 @@ export default class RunViewer extends React.Component {
               model={model}
               bucket={bucket}
               condensed={condensed}
+              modifyRuns={this.props.modifyRuns}
             />
           </Grid.Column>
         </Grid.Row>

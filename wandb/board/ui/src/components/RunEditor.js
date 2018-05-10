@@ -72,54 +72,7 @@ class RunEditor extends React.Component {
                 <Form.Field>
                   <label>Tags</label>
                 </Form.Field>
-                <Form.Input
-                  width={6}
-                  value={this.state.newTag}
-                  onChange={(e, {value}) => {
-                    this.setState({newTag: value});
-                  }}
-                />
-
-                <Button
-                  icon="plus"
-                  content="Add"
-                  className="labeled"
-                  onClick={e => {
-                    e.preventDefault();
-                    if (this.state.newTag.length) {
-                      this.setState({
-                        canSubmit: true,
-                        tags: _.sortedUniq(
-                          _.concat(this.state.tags, this.state.newTag)
-                        ),
-                        newTag: '',
-                      });
-                    }
-                  }}
-                />
-              </Form.Group>
-            </Grid.Column>
-          </Grid.Row>
-
-          <Grid.Row>
-            {' '}
-            <Grid.Column>
-              <Form.Group>
-                {this.state.tags.map(tag => (
-                  <Label key={tag}>
-                    {tag}
-                    <Icon
-                      name="delete"
-                      onClick={e => {
-                        e.preventDefault();
-                        this.setState({
-                          canSubmit: true,
-                          tags: this.state.tags.filter(t => t !== tag),
-                        });
-                      }}
-                    />
-                  </Label>
-                ))}
+                {this.state.tags.map(tag => <Label key={tag}>{tag}</Label>)}
               </Form.Group>
             </Grid.Column>
           </Grid.Row>

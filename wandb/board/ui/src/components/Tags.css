@@ -1,0 +1,25 @@
+.overview .ui.button.filter {
+  border-radius: 0.29rem;
+}
+.overview:hover .ui.button.filter {
+  border-radius: 0.29rem 0 0 0.29rem;
+}
+.overview button.delete,
+.overview button.addButton {
+  display: none;
+}
+.overview:hover button.delete,
+.overview:hover button.addButton {
+  display: inline-block;
+}
+.popupOpened button.addButton {
+  display: inline-block;
+}
+
+.tagsWrapper .ui.buttons {
+  margin: 0 5px 0 0;
+}
+.tagsWrapper button.ui.button,
+.tagsWrapper button.ui.button:hover {
+  padding: 4px 8px;
+}
