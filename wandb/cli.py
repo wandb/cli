@@ -26,7 +26,7 @@ import yaml
 import threading
 
 from click.utils import LazyFile
-from click.exceptions import BadParameter, ClickException
+from click.exceptions import BadParameter, ClickException, Abort
 import whaaaaat
 from six.moves import BaseHTTPServer, urllib
 import socket
@@ -67,9 +67,9 @@ class CallbackHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         self.server.result = urllib.parse.parse_qs(
             self.path.split("?")[-1])
         self.send_response(200)
-        t = threading.Thread(target=self.server.shutdown)
-        t.daemon = True
-        t.start()
+        self.end_headers()
+        self.wfile.write(b'Success')
+        self.server.stop()
 
 
 class LocalServer():
@@ -82,9 +82,11 @@ class LocalServer():
         sock = socket.socket()
         sock.bind(('', 0))
         self.port = sock.getsockname()[1]
+        self.blocking = True
         self._server = BaseHTTPServer.HTTPServer(
             ('127.0.0.1', self.port), CallbackHandler)
         self._server.result = {}
+        self._server.stop = self.stop
 
     def qs(self):
         return urllib.parse.urlencode({
@@ -94,8 +96,21 @@ class LocalServer():
     def result(self):
         return self._server.result
 
-    def start(self):
-        self._server.serve_forever()
+    def start(self, blocking=True):
+        self.blocking = blocking
+        if self.blocking:
+            self._server.serve_forever()
+        else:
+            t = threading.Thread(target=self._server.serve_forever)
+            t.daemon = True
+            t.start()
+
+    def stop(self, *args):
+        t = threading.Thread(target=self._server.shutdown)
+        t.daemon = True
+        t.start()
+        if not self.blocking:
+            os.kill(os.getpid(), signal.SIGINT)
 
 
 def display_error(func):
@@ -420,22 +435,19 @@ def pull(project, run, entity):
 def signup(ctx):
     import webbrowser
     server = LocalServer()
-    url = api.app_url + "/vanpelt?invited"
+    url = api.app_url + "/login?invited"
     launched = webbrowser.open_new_tab(
         url + "&{}".format(server.qs()))
     if launched:
+        signal.signal(signal.SIGINT, server.stop)
         click.echo(
-            'Opened [{0}] in your default browser, waiting for callback... (ctrl-c to cancel)'.format(url))
-        server.start()
-        key = server.result.get("key", [])
-        entity = server.result.get("entity", [None])[0]
-        project = server.result.get("project", [None])[0]
+            'Opened [{0}] in your default browser'.format(url))
+        server.start(blocking=False)
+        key = ctx.invoke(login, server=server, browser=False)
         if key:
-            ctx.invoke(login, key=key)
-            ctx.invoke(init)
-        else:
-            click.echo(
-                "Failed to login after signing up, try again or run wandb login")
+            # Only init if we aren't pre-configured
+            if not os.path.isdir(wandb_dir()):
+                ctx.invoke(init)
     else:
         click.echo("Signup with this url in your browser: {0}".format(url))
         click.echo("Then run wandb login")
@@ -444,31 +456,46 @@ def signup(ctx):
 @cli.command(context_settings=CONTEXT, help="Login to Weights & Biases")
 @click.argument("key", nargs=-1)
 @display_error
-def login(key):
+def login(key, server=LocalServer(), browser=True):
     key = key[0] if len(key) > 0 else None
     # Import in here for performance reasons
     import webbrowser
-    # TODO: use Oauth and a local webserver: https://community.auth0.com/questions/6501/authenticating-an-installed-cli-with-oidc-and-a-th
-    url = api.app_url + '/profile?message=true'
+    # TODO: use Oauth?: https://community.auth0.com/questions/6501/authenticating-an-installed-cli-with-oidc-and-a-th
+    url = api.app_url + '/profile?message=key'
     # TODO: google cloud SDK check_browser.py
-    if key:
+    if key or not browser:
         launched = False
     else:
-        launched = webbrowser.open_new_tab(url)
+        launched = webbrowser.open_new_tab(url + "&{}".format(server.qs()))
     if launched:
         click.echo(
-            'Opening [{0}] in a new tab in your default browser.'.format(url))
-    elif not key:
-        click.echo("You can find your API keys here: {0}".format(url))
+            'Opening [{0}] in your default browser'.format(url))
+        server.start(blocking=False)
+    elif not key and browser:
+        click.echo(
+            "You can find your API keys in your browser here: {0}".format(url))
 
-    key = key or click.prompt("Paste an API key from your profile".format(
-        value_proc=lambda x: x.strip()))
+    def cancel_prompt(*args):
+        raise KeyboardInterrupt()
+    # if not os.getenv("WANDB_TEST"):
+    # Hijacking this signal was broke tests
+    signal.signal(signal.SIGINT, cancel_prompt)
+    try:
+        key = key or click.prompt("Paste an API key from your profile",
+                                  value_proc=lambda x: x.strip())
+    except Abort:
+        if server.result.get("key"):
+            key = server.result["key"][0]
+
     if key:
         # TODO: get the username here...
         # username = api.viewer().get('entity', 'models')
         if write_netrc(api.api_url, "user", key):
             click.secho(
                 "Successfully logged in to Weights & Biases!", fg="green")
+    else:
+        click.echo("No key provided, please try again")
+    return key
 
 
 @cli.command(context_settings=CONTEXT, help="Configure a directory with Weights & Biases")

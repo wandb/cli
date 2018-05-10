@@ -9,10 +9,11 @@ from __future__ import absolute_import, print_function
 
 __author__ = """Chris Van Pelt"""
 __email__ = 'vanpelt@wandb.com'
-__version__ = '0.5.16'
+__version__ = '0.5.19'
 
 import atexit
 import click
+import io
 import json
 import logging
 import time
@@ -116,12 +117,17 @@ def _init_headless(run, job_type, cloud=True):
     hooks = ExitHooks()
     hooks.hook()
 
-    stdout_master_fd, stdout_slave_fd = pty.openpty()
-    stderr_master_fd, stderr_slave_fd = pty.openpty()
+    if sys.platform == "win32":
+        # PTYs don't work in windows so we use pipes.
+        stdout_master_fd, stdout_slave_fd = os.pipe()
+        stderr_master_fd, stderr_slave_fd = os.pipe()
+    else:
+        stdout_master_fd, stdout_slave_fd = pty.openpty()
+        stderr_master_fd, stderr_slave_fd = pty.openpty()
 
-    # raw mode so carriage returns etc. don't get added by the terminal driver
-    tty.setraw(stdout_master_fd)
-    tty.setraw(stderr_master_fd)
+        # raw mode so carriage returns etc. don't get added by the terminal driver
+        tty.setraw(stdout_master_fd)
+        tty.setraw(stderr_master_fd)
 
     headless_args = {
         'command': 'headless',
@@ -270,6 +276,15 @@ def try_to_set_up_logging():
     return True
 
 
+def get_python_type():
+    if 'ipykernel' in sys.modules:
+        return 'jupyter'
+    elif 'IPython' in sys.modules:
+        return 'ipython'
+    else:
+        return 'python'
+
+
 def init(job_type='train', config=None):
     global run
     global __stage_dir__
@@ -312,6 +327,20 @@ def init(job_type='train', config=None):
         config = c
     set_global_config(run.config)
 
+    # set this immediately after setting the run and the config. if there is an
+    # exception after this it'll probably break the user script anyway
+    os.environ['WANDB_INITED'] = '1'
+
+    # we do these checks after setting the run and the config because users scripts
+    # may depend on those things
+    if sys.platform == 'win32' and run.mode != 'clirun':
+        termerror('Headless mode isn\'t supported on Windows. If you want to use W&B, please use "wandb run ..."; running normally.')
+        return run
+
+    if get_python_type() != 'python':
+        termerror('W&B doesn\'t work in IPython or Jupyter notebooks. Running normally.')
+        return run
+
     if run.mode == 'clirun' or run.mode == 'run':
         ensure_configured()
 
@@ -336,8 +365,6 @@ def init(job_type='train', config=None):
         run.config.update(config)
 
     atexit.register(run.close_files)
-
-    os.environ['WANDB_INITED'] = '1'
 
     return run
 
