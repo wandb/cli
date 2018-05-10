@@ -78,6 +78,7 @@ class Run extends React.Component {
   }
 
   render() {
+    console.log(this.props);
     let action = this.props.match.path.split('/').pop();
     return (
       <div>

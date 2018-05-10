@@ -1,5 +1,5 @@
 import * as React from 'react';
-import {Button, Dropdown} from 'semantic-ui-react';
+import {Button, Dropdown, Segment} from 'semantic-ui-react';
 
 interface RunSelectTagsProps {
   add: boolean;
@@ -35,20 +35,22 @@ export default class RunSelectTags extends React.Component<
 
   render() {
     return (
-      <Button.Group>
+      <span>
         <Dropdown
           options={this.state.options}
           placeholder="Choose tag(s)"
           search
           selection
-          button
           multiple
+          fluid
+          closeOnChange={true}
           allowAdditions={this.props.add}
           value={this.state.currentValues}
           onAddItem={this.handleAddition}
           onChange={this.handleChange}
         />
         <Button
+          fluid
           type="submit"
           disabled={
             !this.state.currentValues || this.state.currentValues.length === 0
@@ -60,7 +62,7 @@ export default class RunSelectTags extends React.Component<
           }}>
           {this.props.add ? 'Add' : 'Remove'}
         </Button>
-      </Button.Group>
+      </span>
     );
   }
 }

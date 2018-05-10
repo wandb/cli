@@ -738,3 +738,14 @@ export function groupConfigIdx(configs, key) {
   });
   return keyToGroup;
 }
+
+export function extractTags(data) {
+  let tags = [];
+  data.forEach(item => {
+    tags = [...tags, ...item.tags];
+  });
+  tags = [...new Set(tags)].map(item => {
+    return {text: item, value: item};
+  });
+  return tags;
+}

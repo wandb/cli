@@ -62,6 +62,8 @@ export default class Tags extends React.Component {
           </Button.Group>
         ))}
         <Popup
+          wide
+          className="addTagsPopup"
           trigger={
             <Button
               icon="plus"

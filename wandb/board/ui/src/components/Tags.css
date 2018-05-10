@@ -9,9 +9,8 @@
   display: none;
 }
 .overview:hover button.delete,
-.overview:hover button.addButton {
-  display: inline-block;
-}
+.overview:hover button.addButton,
+.popupOpened button.delete,
 .popupOpened button.addButton {
   display: inline-block;
 }
@@ -22,4 +21,12 @@
 .tagsWrapper button.ui.button,
 .tagsWrapper button.ui.button:hover {
   padding: 4px 8px;
+}
+
+.overview .ui.items > .item .extra {
+  max-width: none;
+}
+
+.addTagsPopup {
+  right: 0 !important;
 }

@@ -28,6 +28,7 @@ import {
   defaultViews,
   parseBuckets,
   setupKeySuggestions,
+  extractTags,
 } from '../util/runhelpers.js';
 import {MAX_HISTORIES_LOADED} from '../util/constants.js';
 import {bindActionCreators} from 'redux';
@@ -190,15 +191,9 @@ class Runs extends React.Component {
     this.setState({activeTab: activeIndex});
 
   render() {
-    let tags = [];
+    let tags = extractTags(this.props.data.base);
     let ModelInfo = this.props.ModelInfo;
     const filterCount = Filter.countIndividual(this.props.runFilters);
-    this.props.data.base.forEach(item => {
-      tags = [...tags, ...item.tags];
-    });
-    tags = [...new Set(tags)].map(item => {
-      return {text: item, value: item};
-    });
     return (
       <div>
         <Grid>

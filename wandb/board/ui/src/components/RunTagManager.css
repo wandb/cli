@@ -1,0 +1,15 @@
+.tagsManagerPopup {
+  right: 0 !important;
+}
+.tagsManagerPopup .ui.grid > .row {
+  padding-bottom: 0.5rem;
+  padding-top: 0.5rem;
+}
+.tagsManagerPopup .ui.grid > .row > .column {
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}
+.tagsManagerPopup .ui.button {
+  padding-left: 0.2rem;
+  padding-right: 0.2rem;
+}

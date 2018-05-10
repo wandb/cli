@@ -1,6 +1,7 @@
 import * as React from 'react';
 import {Confirm, Button, Icon, Popup, Grid} from 'semantic-ui-react';
 import RunSelectTags from './RunSelectTags';
+import './RunTagManager.css';
 
 interface RunTagManagerProps {
   selectedRuns: object[];
@@ -96,6 +97,8 @@ export default class RunTagManager extends React.Component<
           confirmButton={this.state.confirmButton}
         />
         <Popup
+          wide
+          className="tagsManagerPopup"
           trigger={
             <Button
               icon="lightning"
@@ -108,25 +111,7 @@ export default class RunTagManager extends React.Component<
           onClose={this.handleClosePopup}
           open={this.state.isOpen}
           content={
-            <Grid>
-              <Grid.Row>
-                <Grid.Column>
-                  <Button onClick={e => this.batchTags(e, ['hidden'])} fluid>
-                    <Icon name="hide" />
-                    Hide {this.props.selectedRuns.length} run(s)
-                  </Button>
-                </Grid.Column>
-              </Grid.Row>
-              <Grid.Row>
-                <Grid.Column>
-                  <Button
-                    onClick={e => this.batchTags(e, ['hidden'], false)}
-                    fluid>
-                    <Icon name="unhide" />
-                    Unhide {this.props.selectedRuns.length} run(s)
-                  </Button>
-                </Grid.Column>
-              </Grid.Row>
+            <Grid columns="equal">
               <Grid.Row>
                 <Grid.Column>
                   <RunSelectTags
@@ -143,6 +128,22 @@ export default class RunTagManager extends React.Component<
                     batchTags={this.batchTags}
                     tags={this.state.options}
                   />
+                </Grid.Column>
+              </Grid.Row>
+              <Grid.Row>
+                <Grid.Column>
+                  <Button onClick={e => this.batchTags(e, ['hidden'])} fluid>
+                    <Icon name="hide" />
+                    Hide {this.props.selectedRuns.length} run(s)
+                  </Button>
+                </Grid.Column>
+                <Grid.Column>
+                  <Button
+                    onClick={e => this.batchTags(e, ['hidden'], false)}
+                    fluid>
+                    <Icon name="unhide" />
+                    Unhide {this.props.selectedRuns.length} run(s)
+                  </Button>
                 </Grid.Column>
               </Grid.Row>
             </Grid>
