@@ -4,134 +4,501 @@ import {
   Checkbox,
   Icon,
   Image,
+  Label,
+  Loader,
   Table,
   Item,
-  Loader,
   Popup,
 } from 'semantic-ui-react';
 import TimeAgo from 'react-timeago';
 import {NavLink} from 'react-router-dom';
 import './RunFeed.css';
 import Launcher from '../containers/Launcher';
+import FixedLengthString from '../components/FixedLengthString';
+import Tags from '../components/Tags';
+import RunFeedRunRow from './RunFeedRunRow';
 import {connect} from 'react-redux';
 import {bindActionCreators} from 'redux';
-import {
-  addFilter,
-  enableColumn,
-  toggleRunSelection,
-  setSort,
-} from '../actions/run';
+import {makeShouldUpdate} from '../util/shouldUpdate';
+import {setFilters, enableColumn, setSort} from '../actions/run';
 import _ from 'lodash';
-import {JSONparseNaN} from '../util/jsonnan';
+// import {JSONparseNaN} from '../util/jsonnan';
 import Pagination from './Pagination';
-import numeral from 'numeral';
 import {
   displayValue,
   getRunValue,
   sortableValue,
-  filterRuns,
+  stateToIcon,
+  truncateString,
+  autoCols,
 } from '../util/runhelpers.js';
+import withRunsDataLoader from '../containers/RunsDataLoader';
 import ContentLoader from 'react-content-loader';
+import * as Selection from '../util/selections';
+import * as Run from '../util/runs';
+import * as Filter from '../util/filters';
 
-class ValueDisplay extends PureComponent {
+const maxColNameLength = 20;
+
+class RunFeedHeader extends React.Component {
+  constructor(props) {
+    super(props);
+    // This seems like it would be expensive but it's not (.5ms on a row with ~100 columns)
+    this._shouldUpdate = makeShouldUpdate({
+      name: 'RunFeedHeader',
+      deep: ['columnNames'],
+      ignoreFunctions: true,
+      debug: false,
+    });
+  }
+
+  shouldComponentUpdate(nextProps, nextState) {
+    return this._shouldUpdate(this.props, nextProps);
+  }
+
   render() {
+    let {sort, columnNames} = this.props;
+    let longestColumn =
+      Object.assign([], columnNames).sort((a, b) => b.length - a.length)[0] ||
+      '';
     return (
-      <Popup
-        on="hover"
-        hoverable
-        position="left center"
-        style={{padding: 6}}
-        trigger={
-          <span className="config">
-            {this.props.content ? (
-              <span className="value"> {this.props.content} </span>
-            ) : (
-              <span>
-                <span className="value">{displayValue(this.props.value)}</span>{' '}
-                {!this.props.justValue && (
-                  <span className="key">{this.props.valKey}</span>
-                )}
-              </span>
-            )}
-          </span>
-        }
-        content={
-          <span>
-            {this.props.enablePopout && (
-              <Popup
-                on="hover"
-                inverted
-                size="tiny"
-                trigger={
-                  <Button
-                    style={{padding: 6}}
-                    icon="external square"
-                    onClick={() => {
-                      this.props.enableColumn(
-                        this.props.section + ':' + this.props.valKey,
-                      );
-                    }}
-                  />
+      <Table.Header>
+        <Table.Row
+          style={{
+            height: Math.min(longestColumn.length, maxColNameLength) * 8,
+            borderLeft: '1px solid rgba(34,36,38,.15)',
+          }}>
+          {columnNames.map(columnName => {
+            let columnKey = columnName.split(':')[1];
+            if (columnName === 'Select') {
+              return <Table.HeaderCell key="select" />;
+            }
+            return (
+              <Table.HeaderCell
+                key={columnName}
+                className={
+                  _.startsWith(columnName, 'config:') ||
+                  _.startsWith(columnName, 'summary:')
+                    ? 'rotate'
+                    : ''
                 }
-                content="Pop out"
-              />
-            )}
-            <Popup
-              on="hover"
-              inverted
-              size="tiny"
-              trigger={
-                <Button
-                  style={{padding: 6}}
-                  icon="unhide"
-                  onClick={() => {
-                    let filterKey = {
-                      section: this.props.section,
-                      value: this.props.valKey,
-                    };
-                    this.props.addFilter(
-                      'filter',
-                      filterKey,
-                      '=',
-                      sortableValue(this.props.value),
-                    );
-                  }}
-                />
-              }
-              content="Add filter"
-            />
-          </span>
+                style={{textAlign: 'center', verticalAlign: 'bottom'}}
+                onClick={() => {
+                  if (columnName === 'Runtime') {
+                    return;
+                  }
+                  if (columnName === 'Ran') {
+                    this.props.setSort(null, true);
+                  } else {
+                    let ascending = true;
+                    if (sort.name === columnName) {
+                      ascending = !sort.ascending;
+                    }
+                    this.props.setSort(columnName, ascending);
+                  }
+                }}>
+                <div>
+                  {_.startsWith(columnName, 'config:') ||
+                  _.startsWith(columnName, 'summary:') ? (
+                    columnKey.length > maxColNameLength ? (
+                      <span key={columnName}>
+                        {truncateString(columnKey, maxColNameLength)}
+                      </span>
+                    ) : (
+                      <span>{columnKey}</span>
+                    )
+                  ) : (
+                    <span>{columnName}</span>
+                  )}
+
+                  {sort.name === columnName &&
+                    (sort.ascending ? (
+                      <Icon name="caret up" />
+                    ) : (
+                      <Icon name="caret down" />
+                    ))}
+                </div>
+              </Table.HeaderCell>
+            );
+          })}
+        </Table.Row>
+      </Table.Header>
+    );
+  }
+}
+
+class RunFeedSubgroupRuns extends React.Component {
+  _setup(props) {
+    if (props.setSubgroupLength) {
+      if (!props.loading && props.data && props.data.filtered) {
+        props.setSubgroupLength(props.data.filtered.length);
+      } else {
+        props.setSubgroupLength(1);
+      }
+    }
+  }
+
+  componentWillMount() {
+    this._setup(this.props);
+  }
+
+  componentWillReceiveProps(nextProps) {
+    this._setup(nextProps);
+  }
+
+  render() {
+    if (this.props.loading) {
+      return (
+        <RunFeedRunRow
+          {...this.props}
+          descriptionHeight={
+            this.props.subgroupCount ? this.props.descriptionHeight : 1
+          }
+          loading={this.props.subgroupCount ? false : true}
+          subgroupLoading={true}
+        />
+      );
+    }
+    const runs = this.props.data.filtered;
+    return runs.map((run, index) => {
+      return (
+        <RunFeedRunRow
+          key={run.id}
+          {...this.props}
+          descriptionHeight={index === 0 && this.props.descriptionHeight}
+          subgroupHeight={index === 0 && runs.length}
+          run={run}
+          allowSelection
+        />
+      );
+    });
+  }
+}
+
+RunFeedSubgroupRuns = withRunsDataLoader(RunFeedSubgroupRuns);
+
+class RunFeedSubgroupRow extends React.Component {
+  render() {
+    const {run, subgroupName, firstCell, groupHeight, runsClick} = this.props;
+    if (!this.props.open) {
+      return <RunFeedRunRow {...this.props} />;
+    } else {
+      let query = _.cloneDeep(this.props.query);
+      const groupKey = Run.keyFromString(this.props.query.grouping.group);
+      const subgroupKey = Run.keyFromString(this.props.query.grouping.subgroup);
+      query.filters = {
+        op: 'AND',
+        filters: [
+          query.filters,
+          {
+            key: groupKey,
+            op: '=',
+            value: Run.getValue(run, groupKey),
+          },
+          {
+            key: subgroupKey,
+            op: '=',
+            value: Run.getValue(run, subgroupKey),
+          },
+        ],
+      };
+      query.level = 'run';
+      // Big page size so we load all runs
+      query.page = {
+        size: 1000,
+      };
+      return (
+        <RunFeedSubgroupRuns
+          {...this.props}
+          query={query}
+          setSubgroupLength={this.props.setSubgroupLength}
+        />
+      );
+    }
+  }
+}
+
+class RunFeedSubgroups extends React.Component {
+  state = {openSubgroups: {}, subgroupLengths: {}, openAllSubgroups: false};
+
+  openSubgroups() {
+    let openSubgroups = this.state.openSubgroups;
+    const subgroupKey = Run.keyFromString(this.props.query.grouping.subgroup);
+    const runs = this.props.data.filtered;
+    if (this.state.openAllSubgroups) {
+      openSubgroups = _.fromPairs(
+        runs.map(r => [Run.getValue(r, subgroupKey), true])
+      );
+    }
+    return openSubgroups;
+  }
+
+  render() {
+    if (this.props.loading) {
+      return (
+        <RunFeedRunRow
+          {...this.props}
+          descriptionHeight={1}
+          showSubgroup={false}
+        />
+      );
+    }
+    if (!this.props.subgroupOpen) {
+      return (
+        <RunFeedRunRow
+          {...this.props}
+          descriptionHeight={1}
+          subgroupHeight={1}
+          showSubgroup={false}
+          runsOpen={false}
+          runsClick={() => {
+            this.props.subgroupClick();
+            this.setState({openAllSubgroups: true});
+          }}
+        />
+      );
+    }
+    const subgroupKey = Run.keyFromString(this.props.query.grouping.subgroup);
+    const runs = this.props.data.filtered;
+    const openSubgroups = this.openSubgroups();
+    const allOpen =
+      _.filter(openSubgroups, open => open).length === runs.length;
+    const descriptionHeight = _.sum(
+      runs.map(
+        run =>
+          openSubgroups[Run.getValue(run, subgroupKey)] &&
+          this.state.subgroupLengths[Run.getValue(run, subgroupKey)]
+            ? this.state.subgroupLengths[Run.getValue(run, subgroupKey)]
+            : 1
+      )
+    );
+    return _.sortBy(runs, r => Run.getValue(r, subgroupKey)).map(
+      (run, index) => {
+        const subgroup = Run.getValue(run, subgroupKey);
+        const subgroupOpen = !!openSubgroups[subgroup];
+        return (
+          <RunFeedSubgroupRow
+            {...this.props}
+            key={run.id}
+            run={run}
+            subgroupName={subgroup}
+            descriptionHeight={index === 0 && descriptionHeight}
+            runsOpen={allOpen}
+            runsClick={() =>
+              !allOpen
+                ? this.setState({openAllSubgroups: true})
+                : this.setState({openSubgroups: {}, openAllSubgroups: false})
+            }
+            subgroupRunCount={run.groupCounts[1]}
+            subgroupRunsClick={() => {
+              this.setState({
+                openSubgroups: {
+                  ...this.openSubgroups(),
+                  [subgroup]: !subgroupOpen,
+                },
+                openAllSubgroups: false,
+              });
+            }}
+            subgroupRunsOpen={subgroupOpen}
+            open={this.state.openAllSubgroups || openSubgroups[subgroup]}
+            setSubgroupLength={len => {
+              // Use alternative setState convention where we pass a function that modifies the previos
+              // state, because setSubgroupLenght may be called twice in the same event loop pass.
+              this.setState(previousState => {
+                return {
+                  ...previousState,
+                  subgroupLengths: {
+                    ...previousState.subgroupLengths,
+                    [subgroup]: len,
+                  },
+                };
+              });
+            }}
+          />
+        );
+      }
+    );
+  }
+}
+
+RunFeedSubgroups = withRunsDataLoader(RunFeedSubgroups);
+
+class RunFeedGroupSubgroupRow extends React.Component {
+  state = {};
+
+  render() {
+    let {run, loading, columnNames, project} = this.props;
+    let query = _.cloneDeep(this.props.query);
+    const groupKey = Run.keyFromString(this.props.query.grouping.group);
+    query.filters = {
+      op: 'AND',
+      filters: [
+        query.filters,
+        {
+          key: groupKey,
+          op: '=',
+          value: Run.getValue(run, groupKey),
+        },
+      ],
+    };
+    query.level = 'subgroup';
+    query.disabled = !this.state.subgroupOpen;
+    // Set a big page size so that we load all subgroups
+    query.page = {
+      size: 500,
+    };
+    return (
+      <RunFeedSubgroups
+        {...this.props}
+        showSubgroup={true}
+        subgroupHeight={1}
+        subgroupClick={() =>
+          this.setState({subgroupOpen: !this.state.subgroupOpen})
         }
+        subgroupOpen={this.state.subgroupOpen}
+        query={query}
       />
     );
   }
 }
 
-const mapValueDisplayDispatchToProps = (dispatch, ownProps) => {
-  return bindActionCreators({addFilter, enableColumn}, dispatch);
-};
+class RunFeedGroupRow extends React.Component {
+  state = {};
 
-ValueDisplay = connect(null, mapValueDisplayDispatchToProps)(ValueDisplay);
+  render() {
+    if (!this.state.runsOpen) {
+      return (
+        <RunFeedRunRow
+          {...this.props}
+          descriptionHeight={1}
+          showSubgroup={false}
+          runsOpen={false}
+          runsClick={() => {
+            this.setState({runsOpen: !this.state.runsOpen});
+          }}
+        />
+      );
+    }
+    let {run, loading, columnNames, project} = this.props;
+    let query = _.cloneDeep(this.props.query);
+    const groupKey = Run.keyFromString(this.props.query.grouping.group);
+    query.filters = {
+      op: 'AND',
+      filters: [
+        query.filters,
+        {
+          key: groupKey,
+          op: '=',
+          value: Run.getValue(run, groupKey),
+        },
+      ],
+    };
+    query.level = 'run';
+    query.disabled = !this.state.runsOpen;
+    // Set a big page size so that we load all subgroups
+    query.page = {
+      size: 1000,
+    };
+    return (
+      <RunFeedSubgroupRuns
+        {...this.props}
+        descriptionHeight={this.props.runCount}
+        runsClick={() => this.setState({runsOpen: !this.state.runsOpen})}
+        runsOpen={this.state.runsOpen}
+        query={query}
+      />
+    );
+  }
+}
 
 class RunFeed extends PureComponent {
+  state = {pageLoading: true};
+
   static defaultProps = {
     currentPage: 1,
   };
-  state = {sort: 'timeline', dir: 'descending', best: {}, confCounts: {}};
-  stateToIcon(state) {
-    let icon = 'check',
-      color = 'green';
-    if (state === 'failed' || state === 'crashed') {
-      icon = 'remove';
-      color = 'red';
-    } else if (state === 'killed') {
-      icon = 'remove user';
-      color = 'orange';
-    } else if (state === 'running') {
-      icon = 'spinner';
-      color = 'blue';
+  state = {sort: 'timeline', dir: 'descending'};
+
+  handleScroll() {
+    if (this.props.loading || this.state.pageLoading) {
+      return;
     }
-    return <Icon name={icon} color={color} loading={state === 'running'} />;
+    const windowHeight =
+      'innerHeight' in window
+        ? window.innerHeight
+        : document.documentElement.offsetHeight;
+    const body = document.body;
+    const html = document.documentElement;
+    const docHeight = Math.max(
+      body.scrollHeight,
+      body.offsetHeight,
+      html.clientHeight,
+      html.scrollHeight,
+      html.offsetHeight
+    );
+    const windowBottom = windowHeight + window.pageYOffset;
+    if (windowBottom >= docHeight) {
+      if (this.props.data.loadMore) {
+        this.setState({pageLoading: true});
+        this.props.data.loadMore(() => {
+          this.setState({pageLoading: false});
+        });
+      }
+    }
+  }
+
+  componentDidMount() {
+    // window.addEventListener('scroll', () => this.handleScroll());
+  }
+
+  componentWillMount() {
+    this._setup(this.props);
+  }
+
+  componentWillUnmount() {
+    // window.removeEventListener('scroll', () => this.handleScroll());
+  }
+
+  componentDidUpdate() {
+    // setTimeout(() => this.handleScroll(), 1);
+  }
+
+  _setup(props) {
+    const conf = props.config;
+    if (props.data.length === 0 && props.loading) {
+      this.columnNames = ['Description'];
+    } else {
+      this.columnNames = ['Select', 'Description'];
+      if (this.props.query.grouping && this.props.query.grouping.subgroup) {
+        this.columnNames.push('Subgroup');
+      }
+      let configColumns;
+      if (!conf.config || (conf.config.auto == null || conf.config.auto)) {
+        configColumns = autoCols('config', props.data.filtered, 1);
+      } else {
+        configColumns = conf.config.columns || [];
+      }
+      let summaryColumns;
+      if (!conf.summary || (conf.summary.auto == null || conf.summary.auto)) {
+        summaryColumns = autoCols('summary', props.data.filtered, 0);
+      } else {
+        summaryColumns = conf.summary.columns || [];
+      }
+      this.columnNames = this.columnNames.concat(
+        ['Ran', 'Runtime'],
+        configColumns,
+        summaryColumns
+      );
+    }
+  }
+
+  componentWillReceiveProps(nextProps) {
+    if (
+      this.props.data.filtered !== nextProps.data.filtered ||
+      this.props.loading !== nextProps.loading
+    ) {
+      this._setup(nextProps);
+    }
   }
 
   sortedClass(type) {
@@ -149,430 +516,168 @@ class RunFeed extends PureComponent {
     this.props.onSort(name, dir);
   }
 
-  componentWillReceiveProps(nextProps) {
-    //for (var prop of _.keys(nextProps)) {
-    //  console.log('prop equal?', prop, this.props[prop] === nextProps[prop]);
-    //}
-    if (nextProps.runs) {
-      let best = {};
-      let confCounts = {};
-      let total = 0;
-      nextProps.runs.forEach((run, i) => {
-        const summaryMetrics = run.summaryMetrics || {},
-          config = run.config || {};
-        Object.keys(config).forEach(key => {
-          confCounts[key] = confCounts[key] || {};
-          confCounts[key][config[key]] =
-            (confCounts[key][config[key]] || 0) + 1;
-        });
-        best = {...summaryMetrics};
-        total += 1;
-        Object.keys(summaryMetrics).forEach(key => {
-          best[key] = best[key] || {val: summaryMetrics[key], i};
-          let better =
-            this.state.dir === 'ascending'
-              ? best[key].val <= summaryMetrics[key]
-              : best[key].val > summaryMetrics[key];
-          if (better) {
-            best[key] = {val: summaryMetrics[key], i};
-          }
-        });
-      });
-      //Ignore things that change every time
-      Object.keys(confCounts).forEach(key => {
-        Object.keys(confCounts[key]).forEach(val => {
-          if (confCounts[key][val] >= total) {
-            confCounts[key][val] = 1;
-          }
-        });
-      });
-      this.setState({best, confCounts});
-    }
-  }
-
-  bestConfig(config) {
-    const best = Object.keys(config)
-      .sort()
-      .sort((a, b) => {
-        return (
-          Object.keys(this.state.confCounts[b] || {}).length -
-          Object.keys(this.state.confCounts[a] || {}).length
-        );
-      });
-    return best; //.slice(0, 3);
-  }
-
-  tablePlaceholders(limit, length) {
-    let pageLength = !length || length > limit ? limit : length;
-    return Array.from({length: pageLength}).map((x, i) => {
-      return {id: i};
-    });
-  }
-
-  descriptionCell(edge, props) {
-    return (
-      <Table.Cell className="overview" key="Description">
-        {this.props.loading && (
-          <ContentLoader
-            style={{height: 43}}
-            height={63}
-            width={350}
-            speed={2}
-            primaryColor={'#f3f3f3'}
-            secondaryColor={'#e3e3e3'}>
-            <circle cx="32" cy="32" r="30" />
-            <rect x="75" y="13" rx="4" ry="4" width="270" height="13" />
-            <rect x="75" y="40" rx="4" ry="4" width="50" height="8" />
-          </ContentLoader>
-        )}
-        {!this.props.loading && (
-          <Item.Group>
-            <Item>
-              <Item.Image size="tiny" style={{width: 40}}>
-                <Image
-                  src={edge.user && edge.user.photoUrl}
-                  size="mini"
-                  style={{borderRadius: '500rem'}}
-                />
-              </Item.Image>
-              <Item.Content>
-                <Item.Header>
-                  <NavLink
-                    to={`/${props.project.entityName}/${
-                      props.project.name
-                    }/runs/${edge.name}`}>
-                    {edge.description || edge.name
-                      ? (edge.description || edge.name).split('\n')[0]
-                      : ''}{' '}
-                    {this.stateToIcon(edge.state)}
-                  </NavLink>
-                </Item.Header>
-                <Item.Extra style={{marginTop: 0}}>
-                  <strong>{edge.user && edge.user.username}</strong>
-                  {/* edge.host && `on ${edge.host} ` */}
-                  {/*edge.fileCount + ' files saved' NOTE: to add this back, add fileCount back to RUNS_QUERY*/}
-                </Item.Extra>
-                {props.admin && (
-                  <Launcher runId={edge.id} runName={edge.name} />
-                )}
-              </Item.Content>
-            </Item>
-          </Item.Group>
-        )}
-      </Table.Cell>
-    );
-  }
-
   render() {
-    let lastDay = 0,
-      stats =
-        this.props.project &&
-        Object.keys(JSONparseNaN(this.props.project.summaryMetrics)).sort(),
-      runsLength = this.props.runs && this.props.runs.length,
-      startIndex = (this.props.currentPage - 1) * this.props.limit,
-      endIndex = Math.min(startIndex + this.props.limit, runsLength),
-      longestColumn =
-        Object.assign([], this.props.columnNames).sort(
-          (a, b) => b.length - a.length,
-        )[0] || '',
-      runs =
-        this.props.runs && this.props.runs.length > 0 && !this.props.loading
-          ? this.props.runs.slice(startIndex, endIndex)
-          : this.tablePlaceholders(
-              this.props.limit,
-              this.props.project.bucketCount,
-            );
+    const runsLength = this.props.runCount;
+    let runs = this.props.data.filtered;
+    if (!this.props.loading && runsLength === 0) {
+      return (
+        <div style={{marginTop: 30}}>No runs match the chosen filters.</div>
+      );
+    }
     return (
       <div>
         <div className="runsTable">
           <Table
-            definition={this.props.selectable}
+            definition
+            style={{borderLeft: null}}
             celled
             sortable
             compact
             unstackable
             size="small">
-            <Table.Header>
-              <Table.Row
-                style={{
-                  height: longestColumn.length * 6,
-                }}>
-                {this.props.selectable && <Table.HeaderCell />}
-                {this.props.columnNames
-                  .filter(columnName => this.props.columns[columnName])
-                  .map(columnName => (
-                    <Table.HeaderCell
-                      key={columnName}
-                      className={
-                        _.startsWith(columnName, 'config:') ||
-                        _.startsWith(columnName, 'summary:')
-                          ? 'rotate'
-                          : ''
-                      }
-                      style={{textAlign: 'center', verticalAlign: 'bottom'}}
-                      onClick={() => {
-                        if (columnName == 'Config' || columnName == 'Summary') {
-                          return;
-                        }
-                        let ascending = true;
-                        if (this.props.sort.name == columnName) {
-                          ascending = !this.props.sort.ascending;
-                        }
-                        this.props.setSort(columnName, ascending);
-                      }}>
-                      <div>
-                        <span>
-                          {_.startsWith(columnName, 'config:') ||
-                          _.startsWith(columnName, 'summary:')
-                            ? columnName.split(':')[1]
-                            : columnName}
-                          {this.props.sort.name == columnName &&
-                            (this.props.sort.ascending ? (
-                              <Icon name="caret up" />
-                            ) : (
-                              <Icon name="caret down" />
-                            ))}
-                        </span>
-                      </div>
-                    </Table.HeaderCell>
-                  ))}
-              </Table.Row>
-            </Table.Header>
+            <RunFeedHeader
+              sort={this.props.sort}
+              setSort={this.props.setSort}
+              columnNames={this.columnNames}
+            />
             <Table.Body>
-              {runs &&
+              {(this.state.pageLoading || !this.props.loading) &&
+                runs &&
                 runs.map((run, i) => {
-                  //TODO: this should always be an object
-                  const summary = run.summary;
-                  const config = run.config;
-                  let event = (
-                    <Table.Row key={run.id}>
-                      {this.props.selectable && (
-                        <Table.Cell collapsing>
-                          <Checkbox
-                            checked={!!this.props.selectedRuns[run.name]}
-                            onChange={() =>
-                              this.props.toggleRunSelection(run.name, run.id)
-                            }
-                          />
-                        </Table.Cell>
-                      )}
-                      {(this.props.loading
-                        ? ['Description']
-                        : this.props.columnNames
-                      )
-                        .filter(
-                          columnName =>
-                            this.props.loading
-                              ? true
-                              : this.props.columns[columnName],
-                        )
-                        .map(columnName => {
-                          if (columnName == 'Description') {
-                            return this.descriptionCell(run, this.props);
-                          } else if (columnName == 'Sweep') {
-                            return (
-                              <Table.Cell key="stop" collapsing>
-                                {run.sweep && (
-                                  <ValueDisplay
-                                    section="sweep"
-                                    valKey="name"
-                                    value={run.sweep.name}
-                                    content={
-                                      <NavLink
-                                        to={`/${
-                                          this.props.project.entityName
-                                        }/${this.props.project.name}/sweeps/${
-                                          run.sweep.name
-                                        }`}>
-                                        {run.sweep.name}
-                                      </NavLink>
-                                    }
-                                  />
-                                )}
-                              </Table.Cell>
-                            );
-                          } else if (columnName == 'Ran') {
-                            return (
-                              <Table.Cell key={columnName} collapsing>
-                                <TimeAgo date={run.createdAt + 'Z'} />
-                              </Table.Cell>
-                            );
-                          } else if (columnName == 'Runtime') {
-                            return (
-                              <Table.Cell key={columnName} collapsing>
-                                {run.heartbeatAt && (
-                                  <TimeAgo
-                                    date={run.createdAt + 'Z'}
-                                    now={() => {
-                                      return Date.parse(run.heartbeatAt + 'Z');
-                                    }}
-                                    formatter={(v, u, s, d, f) =>
-                                      f().replace(s, '')
-                                    }
-                                    live={false}
-                                  />
-                                )}
-                              </Table.Cell>
-                            );
-                          } else if (columnName == 'Config') {
-                            return (
-                              <Table.Cell
-                                className="config"
-                                key={columnName}
-                                collapsing>
-                                <div>
-                                  {config &&
-                                    this.bestConfig(config)
-                                      .slice(0, 20)
-                                      .map(k => (
-                                        <ValueDisplay
-                                          section="config"
-                                          key={k}
-                                          valKey={k}
-                                          value={config[k]}
-                                          enablePopout
-                                        />
-                                      ))}
-                                </div>
-                              </Table.Cell>
-                            );
-                          } else if (columnName == 'Summary') {
-                            return (
-                              <Table.Cell
-                                className="config"
-                                key={columnName}
-                                collapsing>
-                                <div>
-                                  {_.keys(summary)
-                                    .slice(0, 20)
-                                    .map(k => (
-                                      <ValueDisplay
-                                        section="summary"
-                                        key={k}
-                                        valKey={k}
-                                        value={summary[k]}
-                                        enablePopout
-                                      />
-                                    ))}
-                                </div>
-                              </Table.Cell>
-                            );
-                          } else if (columnName == 'Stop') {
-                            return (
-                              <Table.Cell key="stop" collapsing>
-                                {run.shouldStop}
-                              </Table.Cell>
-                            );
-                          } else {
-                            let key = columnName.split(':')[1];
-                            return (
-                              <Table.Cell
-                                key={columnName}
-                                style={{
-                                  maxWidth: 200,
-                                  direction: 'rtl',
-                                  textOverflow: 'ellipsis',
-                                  overflow: 'hidden',
-                                }}
-                                collapsing>
-                                <ValueDisplay
-                                  section="config"
-                                  valKey={key}
-                                  value={getRunValue(run, columnName)}
-                                  justValue
-                                />
-                              </Table.Cell>
-                            );
-                          }
-                        })}
-                    </Table.Row>
-                  );
-                  return event;
+                  if (
+                    this.props.query.level &&
+                    this.props.query.grouping &&
+                    this.props.query.grouping.group &&
+                    this.props.query.grouping.subgroup &&
+                    this.props.query.level === 'group'
+                  ) {
+                    return (
+                      <RunFeedGroupSubgroupRow
+                        key={i}
+                        groupKey={this.props.query.grouping.group}
+                        subgroupKey={this.props.query.grouping.subgroup}
+                        run={run}
+                        descriptionRun={run}
+                        subgroupCount={run.groupCounts[0]}
+                        runCount={run.groupCounts[1]}
+                        loading={false}
+                        selections={this.props.selections}
+                        columnNames={this.columnNames}
+                        project={this.props.project}
+                        addFilter={(type, key, op, value) =>
+                          this.props.setFilters(
+                            type,
+                            Filter.Update.groupPush(this.props.filters, [0], {
+                              key,
+                              op,
+                              value,
+                            })
+                          )
+                        }
+                        query={this.props.query}
+                        setFilters={this.props.setFilters}
+                      />
+                    );
+                  } else if (
+                    this.props.query.level &&
+                    this.props.query.grouping &&
+                    this.props.query.grouping.group &&
+                    this.props.query.level === 'group'
+                  ) {
+                    return (
+                      <RunFeedGroupRow
+                        key={i}
+                        groupKey={this.props.query.grouping.group}
+                        subgroupKey={this.props.query.grouping.subgroup}
+                        run={run}
+                        descriptionRun={run}
+                        runCount={run.groupCounts[0]}
+                        loading={false}
+                        selections={this.props.selections}
+                        columnNames={this.columnNames}
+                        project={this.props.project}
+                        addFilter={(type, key, op, value) =>
+                          this.props.setFilters(
+                            type,
+                            Filter.Update.groupPush(this.props.filters, [0], {
+                              key,
+                              op,
+                              value,
+                            })
+                          )
+                        }
+                        query={this.props.query}
+                        setFilters={this.props.setFilters}
+                      />
+                    );
+                  } else {
+                    return (
+                      <RunFeedRunRow
+                        key={i}
+                        run={run}
+                        loading={false}
+                        selections={this.props.selections}
+                        columnNames={this.columnNames}
+                        project={this.props.project}
+                        descriptionHeight={1}
+                        addFilter={(type, key, op, value) =>
+                          this.props.setFilters(
+                            type,
+                            Filter.Update.groupPush(this.props.filters, [0], {
+                              key,
+                              op,
+                              value,
+                            })
+                          )
+                        }
+                        setFilters={this.props.setFilters}
+                        allowSelection
+                      />
+                    );
+                  }
                 })}
+              {this.props.loading && (
+                <RunFeedRunRow
+                  descriptionHeight={1}
+                  loading={true}
+                  run={{summary: {}, config: {}}}
+                  columnNames={this.columnNames}
+                />
+              )}
             </Table.Body>
           </Table>
         </div>
-        <Pagination
-          id={this.props.project.id}
-          total={runsLength}
-          limit={this.props.limit}
-          scroll={false}
-        />
+        <Button content="Load More" onClick={() => this.handleScroll()} />
       </div>
     );
   }
-}
-
-function autoConfigCols(runs) {
-  runs = runs.filter(run => run.config);
-  if (runs.length <= 1) {
-    return [];
-  }
-  let allKeys = _.uniq(_.flatMap(runs, run => _.keys(run.config)));
-  let result = {};
-  for (var key of allKeys) {
-    let vals = runs.map(run => run.config[key]);
-    let types = _.uniq(vals.map(val => typeof val));
-    if (types.length !== 1) {
-      // Show columns that have different types
-      result[key] = true;
-    } else {
-      let type = types[0];
-      let uniqVals = _.uniq(vals);
-      if (type === 'string') {
-        // Show columns that have differing values unless all values differ
-        if (uniqVals.length > 1 && uniqVals.length < vals.length) {
-          result[key] = true;
-        } else {
-          result[key] = false;
-        }
-      } else {
-        if (vals.every(val => _.isArray(val) && val.length === 0)) {
-          // Special case for empty arrays, we don't get non-empty arrays
-          // as config values because of the flattening that happens at a higher
-          // layer.
-          result[key] = false;
-        } else {
-          // Show columns that have differing values even if all values differ
-          if (uniqVals.length > 1) {
-            result[key] = true;
-          } else {
-            result[key] = false;
-          }
-        }
-      }
-    }
-  }
-  return _.mapKeys(result, (value, key) => 'config:' + key);
 }
 
 function mapStateToProps() {
   let prevColumns = null;
   let prevRuns = null;
   let cols = {};
+  let autoCols = {};
 
   return function(state, ownProps) {
     const id = ownProps.project.id;
-    if (state.runs.columns !== prevColumns || ownProps.runs !== prevRuns) {
-      prevColumns = state.runs.columns;
-      prevRuns = ownProps.runs;
-      if (state.runs.columns['_ConfigAuto']) {
-        let autoCols = autoConfigCols(ownProps.runs);
-        cols = {...state.runs.columns, ...autoCols};
-      } else {
-        cols = state.runs.columns;
-      }
-    }
     return {
       columns: cols,
       sort: state.runs.sort,
       currentPage: state.runs.pages[id] && state.runs.pages[id].current,
+      selections: state.runs.filters.select,
+      filters: state.runs.filters.filter,
     };
   };
 }
 
 const mapDispatchToProps = (dispatch, ownProps) => {
-  return bindActionCreators({toggleRunSelection, setSort}, dispatch);
+  return bindActionCreators({setFilters, setSort}, dispatch);
 };
 
-export default connect(mapStateToProps(), mapDispatchToProps)(RunFeed);
+// export dumb component for testing purposes
+export {RunFeed};
+
+export default withRunsDataLoader(
+  connect(mapStateToProps(), mapDispatchToProps)(RunFeed)
+);

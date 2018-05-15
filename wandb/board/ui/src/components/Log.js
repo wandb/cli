@@ -3,6 +3,8 @@ import {List, Segment} from 'semantic-ui-react';
 import './Log.css';
 import {AutoSizer, List as VirtualList} from 'react-virtualized';
 import AU from 'ansi_up';
+import _ from 'lodash';
+import {pusherRunSlug} from '../util/runhelpers';
 
 let unsubscribe;
 try {
@@ -29,7 +31,8 @@ class Log extends React.Component {
     return losses;
   }
 
-  componentWillUnMunt() {
+  componentWillUnmount() {
+    unsubscribe(pusherRunSlug(this.props.match.params));
     unsubscribe('logs-' + this.props.match.params.run);
   }
 
@@ -39,46 +42,40 @@ class Log extends React.Component {
   };
 
   componentDidMount() {
+    this.scrollToBottom();
+    //TODO: this likely belongs higher up in the chain
     this.props.stream(
       this.props.client,
       this.props.match.params,
-      this.props.bucket,
+      this.props.run,
       this.updateCallback,
     );
-    //TODO: This is rather unfortunate
-    if (this.state.autoScroll) {
+  }
+
+  componentDidUpdate(prevProps, prevState) {
+    if (
+      this.props.logLines &&
+      !_.isEqual(this.props.logLines, prevProps.logLines)
+    ) {
+      this.scrollToBottom();
+    }
+  }
+
+  scrollToBottom = () => {
+    if (this.props.logLines && this.state.autoScroll) {
       setTimeout(() => {
         if (this.list) this.list.scrollToRow(this.props.logLines.edges.length);
       }, 500);
     }
-  }
+  };
 
-  componentWillReceiveProps(nextProps) {
-    if (nextProps.logLines && this.props.logLines !== nextProps.logLines) {
-      //TODO: WTF
-      if (this.props.updateLoss) {
-        this.props.updateLoss(
-          this.props.run,
-          this.parseLoss(nextProps.logLines.edges),
-        );
-      }
-      //TODO: This is rather unfortunate
-      if (this.state.autoScroll) {
-        setTimeout(() => {
-          if (this.list)
-            this.list.scrollToRow(this.props.logLines.edges.length);
-        }, 500);
-      }
-    }
-  }
-
-  checkAutoScroll = () => {
-    this.scrolls = this.scrolls || 0;
-    this.scrolls += 1;
-    setTimeout(() => (this.scrolls = 0), 100);
-    if (this.scrolls > 5) {
-      this.setState({autoScroll: false});
-    }
+  checkAutoScroll = e => {
+    // autoScroll is enabled if current scroll position is close to the bottom
+    // or if list is still empty meaning List height is zero
+    const scroll = e.scrollHeight - e.clientHeight - Math.round(e.scrollTop);
+    this.setState({
+      autoScroll: scroll < 5 || e.clientHeight === 0,
+    });
   };
 
   processLine(line) {
@@ -91,7 +88,7 @@ class Log extends React.Component {
     return (
       <div
         key={key}
-        role="item"
+        role="row"
         className={`item ${line.node.level}`}
         style={style}
         dangerouslySetInnerHTML={{
@@ -104,9 +101,14 @@ class Log extends React.Component {
   };
 
   render() {
-    let rowCount = this.props.logLines.edges.length;
+    let rowCount = this.props.logLines ? this.props.logLines.edges.length : 0;
     return (
-      <Segment inverted className="logs" attached style={{height: 400}}>
+      <Segment
+        inverted
+        loading={!this.props.logLines}
+        className="logs"
+        attached
+        style={{height: 400}}>
         <AutoSizer>
           {({width, height}) => (
             <List ordered inverted size="small">

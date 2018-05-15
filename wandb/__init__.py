@@ -1,21 +1,28 @@
 # -*- coding: utf-8 -*-
 
+# Three possible modes:
+#     'cli': running from "wandb" command
+#     'run': we're a script launched by "wandb run"
+#     'dryrun': we're a script not launched by "wandb run"
+
 from __future__ import absolute_import, print_function
 
 __author__ = """Chris Van Pelt"""
 __email__ = 'vanpelt@wandb.com'
+<<<<<<< HEAD
 __version__ = '0.5a5'
+=======
+__version__ = '0.5.21'
+>>>>>>> master
 
 import atexit
 import click
-try:
-    import fcntl
-except ImportError:  # windows
-    fcntl = None
+import io
 import json
 import logging
 import time
 import os
+import contextlib
 try:
     import pty
 except ImportError:  # windows
@@ -31,79 +38,30 @@ try:
 except ImportError:  # windows
     tty = None
 import types
-import webbrowser
 
+from . import env
 from . import io_wrap
+from .core import *
 
-# We use the hidden version if it already exists, otherwise non-hidden.
-if os.path.exists('.wandb'):
-    __stage_dir__ = '.wandb/'
-elif os.path.exists('wandb'):
-    __stage_dir__ = "wandb/"
-else:
-    __stage_dir__ = None
-
-SCRIPT_PATH = os.path.abspath(sys.argv[0])
-
-
-def wandb_dir():
-    return __stage_dir__
+# These imports need to be below "from .core import *" until we remove
+# 'from wandb import __stage_dir__' from api.py etc.
+import wandb.api
+from wandb import wandb_types as types
+from wandb import wandb_config
+from wandb import wandb_run
+from wandb import wandb_socket
+from wandb import util
+from wandb.media import Image
 
 
-def _set_stage_dir(stage_dir):
-    # Used when initing a new project with "wandb init"
-    global __stage_dir__
-    __stage_dir__ = stage_dir
-
-
-if __stage_dir__ is not None:
-    log_fname = __stage_dir__ + 'debug.log'
-else:
-    log_fname = './wandb-debug.log'
-logging.basicConfig(
-    filemode="w",
-    filename=log_fname,
-    level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
-class Error(Exception):
-    """Base W&B Error"""
-    # For python 2 support
-
-    def encode(self, encoding):
-        return self.message
-
-
-# These imports need to be below __stage_dir__ declration until we remove
-# 'from wandb import __stage_dir__' from api.py etc.
-from wandb import wandb_types as types
-from wandb import api as wandb_api
-from wandb import config as wandb_config
-from wandb import wandb_run
-from wandb import wandb_socket
-# Three possible modes:
-#     'cli': running from "wandb" command
-#     'run': we're a script launched by "wandb run"
-#     'dryrun': we're a script not launched by "wandb run"
-
-LOG_STRING = click.style('wandb', fg='blue', bold=True)
-ERROR_STRING = click.style('ERROR', bg='red', fg='green')
-
-
-def termlog(string='', newline=True):
-    if string:
-        line = '\n'.join(['%s: %s' % (LOG_STRING, s)
-                          for s in string.split('\n')])
-    else:
-        line = ''
-    click.echo(line, file=sys.stderr, nl=newline)
-
-
-def termerror(string):
-    string = '\n'.join(['%s: %s' % (ERROR_STRING, s)
-                        for s in string.split('\n')])
-    termlog(string=string, newline=True)
+if __stage_dir__ is not None:
+    log_fname = wandb_dir() + 'debug.log'
+else:
+    log_fname = './wandb-debug.log'
+log_fname = os.path.relpath(log_fname, os.getcwd())
 
 
 def _debugger(*args):
@@ -114,8 +72,10 @@ def _debugger(*args):
 class Callbacks():
     @property
     def Keras(self):
-        from .wandb_keras import WandbKerasCallback
-        return WandbKerasCallback
+        termlog(
+            "DEPRECATED: wandb.callbacks is deprecated, use `from wandb.keras import WandbCallback`")
+        from wandb.keras import WandbCallback
+        return WandbCallback
 
 
 callbacks = Callbacks()
@@ -135,61 +95,43 @@ class ExitHooks(object):
         self.exit_code = code
         self._orig_exit(code)
 
+    def was_ctrl_c(self):
+        return isinstance(self.exception, KeyboardInterrupt)
+
     def exc_handler(self, exc_type, exc, *tb):
         self.exit_code = 1
         self.exception = exc
         if issubclass(exc_type, Error):
             termerror(str(exc))
-        if issubclass(exc_type, KeyboardInterrupt):
+
+        if self.was_ctrl_c():
             self.exit_code = 255
-            traceback.print_exception(exc_type, exc, *tb)
-        else:
-            traceback.print_exception(exc_type, exc, *tb)
+
+        traceback.print_exception(exc_type, exc, *tb)
 
 
-def _init_headless(api, run, job_type, cloud=True):
-    if 'WANDB_DESCRIPTION' in os.environ:
-        run.description = os.environ['WANDB_DESCRIPTION']
+def _init_headless(run, job_type, cloud=True):
+    run.description = env.get_description(run.description)
 
-    # TODO: better failure handling
-    root = api.git.root
-    remote_url = api.git.remote_url
-    host = socket.gethostname()
-    # handle non-git directories
-    if not root:
-        root = os.path.abspath(os.getcwd())
-        remote_url = 'file://%s%s' % (host, root)
-
-    try:
-        import __main__
-        program = __main__.__file__
-    except (ImportError, AttributeError):
-        # probably `python -c`, an embedded interpreter or something
-        program = '<python with no main file>'
-
-    # we need to create the run first of all so history and summary syncing
-    # work even if the syncer process is slow to start.
-    if cloud:
-        upsert_result = api.upsert_run(name=run.id,
-                                       project=api.settings("project"),
-                                       entity=api.settings("entity"),
-                                       config=run.config.as_dict(), description=run.description, host=host,
-                                       program_path=program, repo=remote_url, sweep_name=run.sweep_id,
-                                       job_type=job_type)
-        run.storage_id = upsert_result['id']
-    env = dict(os.environ)
-    run.set_environment(env)
+    environ = dict(os.environ)
+    run.set_environment(environ)
 
     server = wandb_socket.Server()
+    run.socket = server
     hooks = ExitHooks()
     hooks.hook()
 
-    stdout_master_fd, stdout_slave_fd = pty.openpty()
-    stderr_master_fd, stderr_slave_fd = pty.openpty()
+    if sys.platform == "win32":
+        # PTYs don't work in windows so we use pipes.
+        stdout_master_fd, stdout_slave_fd = os.pipe()
+        stderr_master_fd, stderr_slave_fd = os.pipe()
+    else:
+        stdout_master_fd, stdout_slave_fd = pty.openpty()
+        stderr_master_fd, stderr_slave_fd = pty.openpty()
 
-    # raw mode so carriage returns etc. don't get added by the terminal driver
-    tty.setraw(stdout_master_fd)
-    tty.setraw(stderr_master_fd)
+        # raw mode so carriage returns etc. don't get added by the terminal driver
+        tty.setraw(stdout_master_fd)
+        tty.setraw(stderr_master_fd)
 
     headless_args = {
         'command': 'headless',
@@ -198,7 +140,6 @@ def _init_headless(api, run, job_type, cloud=True):
         'stderr_master_fd': stderr_master_fd,
         'cloud': cloud,
         'job_type': job_type,
-        'program': program,
         'port': server.port
     }
     internal_cli_path = os.path.join(
@@ -212,13 +153,36 @@ def _init_headless(api, run, job_type, cloud=True):
     else:
         popen_kwargs = {'pass_fds': [stdout_master_fd, stderr_master_fd]}
 
+    # TODO(adrian): ensure we use *exactly* the same python interpreter
     # TODO(adrian): make wandb the foreground process so we don't give
     # up terminal control until syncing is finished.
     # https://stackoverflow.com/questions/30476971/is-the-child-process-in-foreground-or-background-on-fork-in-c
-    subprocess.Popen(['/usr/bin/env', 'python', internal_cli_path, json.dumps(
-        headless_args)], env=env, **popen_kwargs)
+    wandb_process = subprocess.Popen([sys.executable, internal_cli_path, json.dumps(
+        headless_args)], env=environ, **popen_kwargs)
+    termlog('Started W&B process with PID {}'.format(wandb_process.pid))
     os.close(stdout_master_fd)
     os.close(stderr_master_fd)
+
+    # Listen on the socket waiting for the wandb process to be ready
+    try:
+        success, message = server.listen(30)
+    except KeyboardInterrupt:
+        success = False
+    else:
+        if not success:
+            termerror('W&B process (PID {}) did not respond'.format(
+                wandb_process.pid))
+
+    if not success:
+        wandb_process.kill()
+        for i in range(20):
+            time.sleep(0.1)
+            if wandb_process.poll() is not None:
+                break
+        if wandb_process.poll() is None:
+            termerror('Failed to kill wandb process, PID {}'.format(
+                wandb_process.pid))
+        sys.exit(1)
 
     stdout_slave = os.fdopen(stdout_slave_fd, 'wb')
     stderr_slave = os.fdopen(stderr_slave_fd, 'wb')
@@ -226,32 +190,116 @@ def _init_headless(api, run, job_type, cloud=True):
     stdout_redirector = io_wrap.FileRedirector(sys.stdout, stdout_slave)
     stderr_redirector = io_wrap.FileRedirector(sys.stderr, stderr_slave)
 
+    # TODO(adrian): we should register this right after starting the wandb process to
+    # make sure we shut down the W&B process eg. if there's an exception in the code
+    # above
+    atexit.register(_user_process_finished, server, hooks,
+                    wandb_process, stdout_redirector, stderr_redirector)
+
+    # redirect output last of all so we don't miss out on error messages
     stdout_redirector.redirect()
-    if os.environ.get('WANDB_DEBUG') != 'true':
+    if not env.get_debug():
         stderr_redirector.redirect()
 
-    # Listen on the socket waiting for the wandb process to be ready
-    server.listen(5)
 
-    def done():
-        server.done(hooks.exit_code)
-        logger.info("Waiting for wandb process to finish")
-        server.listen()
+def _user_process_finished(server, hooks, wandb_process, stdout_redirector, stderr_redirector):
+    stdout_redirector.restore()
+    if not env.get_debug():
+        stderr_redirector.restore()
 
-    atexit.register(done)
+    termlog("Waiting for wandb process to finish, PID {}".format(wandb_process.pid))
+    server.done(hooks.exit_code)
+    try:
+        while wandb_process.poll() is None:
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        pass
 
+    if wandb_process.poll() is None:
+        termlog('Killing wandb process, PID {}'.format(wandb_process.pid))
+        wandb_process.kill()
 
 
 # Will be set to the run object for the current run, as returned by
-# wandb.init(). We may want to get rid of this, but WandbKerasCallback
+# wandb.init(). We may want to get rid of this, but WandbCallback
 # relies on it, and it improves the API a bit (user doesn't have to
-# pass the run into WandbKerasCallback)
+# pass the run into WandbCallback)
 run = None
+config = None  # config object shared with the global run
 
 
-def init(job_type='train', config=None):
+def save(path):
+    """symlinks a file into the run directory so it's uploaded
+    """
+    file_name = os.path.basename(path)
+    return os.symlink(os.path.abspath(path), os.path.join(run.dir, file_name))
+
+
+def log(row=None, commit=True):
+    """Log a dict to the global run's history.  If commit is false, enables multiple calls before commiting.
+
+    Eg.
+
+    wandb.log({'train-loss': 0.5, 'accuracy': 0.9})
+    """
+    if row is None:
+        row = {}
+    if commit:
+        run.history.add(row)
+    else:
+        run.history.row.update(row)
+
+
+def ensure_configured():
+    api = wandb.api.Api()
+    # The WANDB_DEBUG check ensures tests still work.
+    if not env.is_debug() and not api.settings('project'):
+        termlog('wandb.init() called but system not configured.\n'
+                'Run "wandb init" or set environment variables to get started')
+        sys.exit(1)
+
+
+def uninit():
+    """Undo the effects of init(). Useful for testing.
+    """
+    global run, config
+    run = config = None
+
+
+def try_to_set_up_logging():
+    try:
+        logging.basicConfig(
+            filemode="w",
+            format='%(asctime)s %(levelname)-7s %(threadName)-10s [%(filename)s:%(funcName)s():%(lineno)s] %(message)s',
+            filename=log_fname,
+            level=logging.DEBUG)
+    except IOError as e:  # eg. in case wandb directory isn't writable
+        if env.is_debug():
+            raise
+        else:
+            termerror('Failed to set up logging: {}'.format(e))
+            return False
+
+    return True
+
+
+def get_python_type():
+    if 'ipykernel' in sys.modules:
+        return 'jupyter'
+    elif 'IPython' in sys.modules:
+        return 'ipython'
+    else:
+        return 'python'
+
+
+def init(job_type='train', config=None, allow_val_change=False):
     global run
     global __stage_dir__
+
+    # the following line is useful to ensure that no W&B logging happens in the user
+    # process that might interfere with what they do
+    # logging.basicConfig(format='user process %(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
     # If a thread calls wandb.init() it will get the same Run object as
     # the parent. If a child process with distinct memory space calls
     # wandb.init(), it won't get an error, but it will get a result of
@@ -263,54 +311,71 @@ def init(job_type='train', config=None):
     if run or os.getenv('WANDB_INITED'):
         return run
 
-    if not wandb_dir():
+    if __stage_dir__ is None:
         __stage_dir__ = "wandb"
-        os.mkdir(__stage_dir__)
+        util.mkdir_exists_ok(wandb_dir())
 
     try:
         signal.signal(signal.SIGQUIT, _debugger)
     except AttributeError:
         pass
 
-    run = wandb_run.Run.from_environment_or_defaults()
+    try:
+        run = wandb_run.Run.from_environment_or_defaults()
+    except IOError as e:
+        termerror('Failed to create run directory: {}'.format(e))
+        sys.exit(1)
+
     run.job_type = job_type
     run.set_environment()
-    if config:
-        run.config.update(config)
-    api = wandb_api.Api()
-    api.set_current_run_id(run.id)
-    if run.mode == 'run':
-        api.ensure_configured()
-        if run.storage_id:
-            # we have to write job_type here because we don't know it before init()
-            api.upsert_run(id=run.storage_id, job_type=job_type)
-        else:
-            _init_headless(api, run, job_type)
 
-        def config_persist_callback():
-            api.upsert_run(id=run.storage_id, config=run.config.as_dict())
+    def set_global_config(c):
+        global config  # because we already have a local config
+        config = c
+    set_global_config(run.config)
+
+    # set this immediately after setting the run and the config. if there is an
+    # exception after this it'll probably break the user script anyway
+    os.environ['WANDB_INITED'] = '1'
+
+    # we do these checks after setting the run and the config because users scripts
+    # may depend on those things
+    if sys.platform == 'win32' and run.mode != 'clirun':
+        termerror(
+            'Headless mode isn\'t supported on Windows. If you want to use W&B, please use "wandb run ..."; running normally.')
+        return run
+
+    if get_python_type() != 'python':
+        termerror(
+            'W&B doesn\'t work in IPython or Jupyter notebooks. Running normally.')
+        return run
+
+    if run.mode == 'clirun' or run.mode == 'run':
+        ensure_configured()
+
+        if run.mode == 'run':
+            _init_headless(run, job_type)
+
         # set the run directory in the config so it actually gets persisted
         run.config.set_run_dir(run.dir)
-        run.config.set_persist_callback(config_persist_callback)
-
-        if bool(os.environ.get('WANDB_SHOW_RUN')):
-            webbrowser.open_new_tab(run.get_url(api))
     elif run.mode == 'dryrun':
         termlog(
-            'wandb tracking run in %s. Run "wandb board" from this directory to see results.' % run.dir)
+            'wandb dry run mode. Run `wandb board` from this directory to see results')
         termlog()
-        _init_headless(api, run, job_type, False)
+        run.config.set_run_dir(run.dir)
+        _init_headless(run, job_type, False)
     else:
         termlog(
             'Invalid run mode "%s". Please unset WANDB_MODE to do a dry run or' % run.mode)
         termlog('run with "wandb run" to do a real run.')
         sys.exit(1)
 
-    atexit.register(run.close_files)
+    if config:
+        run.config.update(config, allow_val_change=allow_val_change)
 
-    os.environ['WANDB_INITED'] = '1'
+    atexit.register(run.close_files)
 
     return run
 
 
-__all__ = ['init', 'termlog', 'run', 'types', 'callbacks']
+__all__ = ['init', 'config', 'termlog', 'run', 'types', 'callbacks']

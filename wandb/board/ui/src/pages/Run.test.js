@@ -1,7 +1,7 @@
 import React from 'react';
 import MockAppWrapper from '../util/test/mockAppWrapper';
 import {Run} from './Run';
-import {Loader} from 'semantic-ui-react';
+import Loader from '../components/Loader';
 import RunViewer from '../components/RunViewer';
 import RunEditor from '../components/RunEditor';
 
@@ -36,6 +36,9 @@ describe('Run page components test', () => {
         summaryMetrics: '{}',
       },
     },
+    views = {
+      run: {},
+    },
     loss = [],
     user = {};
   let container,
@@ -48,31 +51,27 @@ describe('Run page components test', () => {
     };
 
   beforeEach(() => {
-    container = mount(
-      <MockAppWrapper store={store}>
-        <Run
-          match={match}
-          model={model}
-          bucket={model.bucket}
-          loss={loss}
-          user={user}
-          loading={loading}
-        />
-      </MockAppWrapper>,
+    container = shallow(
+      <Run
+        match={match}
+        views={views}
+        loss={loss}
+        user={user}
+        loading={loading}
+        updateLocationParams={() => {}}
+        setBrowserViews={() => {}}
+        setServerViews={() => {}}
+      />
     );
   });
 
   it('finds <Loader /> component', () => {
-    expect(container.find(Loader)).to.have.length(1);
-    loading = false;
+    expect(container.find(Loader)).toHaveLength(1);
   });
 
   it('finds <RunViewer /> component', () => {
-    expect(container.find(RunViewer)).to.have.length(1);
-    match.path = '/:entity/:model/runs/:run/edit';
-  });
-
-  it('finds <RunEditor /> component', () => {
-    expect(container.find(RunEditor)).to.have.length(1);
+    expect(container.find(RunViewer)).toHaveLength(0);
+    container.setProps({project: model, run: model.bucket});
+    expect(container.find(RunViewer)).toHaveLength(1);
   });
 });

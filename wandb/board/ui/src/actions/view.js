@@ -1,17 +1,42 @@
+export const RESET_VIEWS = 'RESET_VIEWS';
 export const SET_SERVER_VIEWS = 'SET_SERVER_VIEWS';
+export const SET_BROWSER_VIEWS = 'SET_BROWSER_VIEWS';
+export const UPDATE_RUNS_TABLE = 'UPDATE_RUNS_TABLE';
 export const ADD_VIEW = 'ADD_VIEW';
+export const UPDATE_VIEW = 'UPDATE_VIEW';
 export const SET_ACTIVE_VIEW = 'SET_ACTIVE_VIEW';
+export const MOVE_ACTIVE_VIEW_LEFT = 'MOVE_ACTIVE_VIEW_LEFT';
+export const MOVE_ACTIVE_VIEW_RIGHT = 'MOVE_ACTIVE_VIEW_RIGHT';
 export const CHANGE_VIEW_NAME = 'CHANGE_VIEW_NAME';
 export const REMOVE_VIEW = 'REMOVE_VIEW';
 export const ADD_PANEL = 'ADD_PANEL';
 export const REMOVE_PANEL = 'REMOVE_PANEL';
 export const UPDATE_PANEL = 'UPDATE_PANEL';
 
-export const setServerViews = (views, browserOnly) => {
+export const resetViews = () => {
+  return {
+    type: RESET_VIEWS,
+  };
+};
+
+export const setServerViews = views => {
   return {
     type: SET_SERVER_VIEWS,
     views,
-    browserOnly,
+  };
+};
+
+export const setBrowserViews = views => {
+  return {
+    type: SET_BROWSER_VIEWS,
+    views,
+  };
+};
+
+export const updateRunsTable = tableConfig => {
+  return {
+    type: UPDATE_RUNS_TABLE,
+    tableConfig,
   };
 };
 
@@ -24,11 +49,34 @@ export const addView = (viewType, viewName, panels) => {
   };
 };
 
+export const updateView = (viewType, viewId, panels) => {
+  return {
+    type: UPDATE_VIEW,
+    viewType,
+    viewId,
+    panels,
+  };
+};
+
 export const setActiveView = (viewType, viewId) => {
   return {
     type: SET_ACTIVE_VIEW,
     viewType,
     viewId,
+  };
+};
+
+export const moveActiveViewLeft = viewType => {
+  return {
+    type: MOVE_ACTIVE_VIEW_LEFT,
+    viewType,
+  };
+};
+
+export const moveActiveViewRight = viewType => {
+  return {
+    type: MOVE_ACTIVE_VIEW_RIGHT,
+    viewType,
   };
 };
 

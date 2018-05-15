@@ -6,7 +6,6 @@ flake8==3.3.0
 tox==2.6.0
 coverage==4.3.4
 Sphinx==1.5.3
-cryptography==1.8.1
 PyYAML==3.12
 pytest==3.0.7
 pytest-watch==4.1.0
@@ -18,3 +17,7 @@ coveralls==1.1
 recommonmark==0.4.0
 freezegun==0.3.9
 sh==1.12.14
+pillow==5.0.0
+numpy
+pytest-flask
+mock==2.0.0

@@ -4,6 +4,7 @@ import graphene
 from graphene import relay
 from .loader import data, find_run, settings
 from wandb.board.app.models import History, Events, Log
+from wandb.board.app.util.errors import NotFoundError
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -82,9 +83,11 @@ class Run(graphene.ObjectType):
     config = graphene.types.json.JSONString()
     summaryMetrics = graphene.types.json.JSONString()
     systemMetrics = graphene.types.json.JSONString()
+    requestSubscribe = graphene.Boolean()
     heartbeatAt = graphene.String()
     events = graphene.List(graphene.String)
-    history = graphene.List(graphene.String)
+    tags = graphene.List(graphene.String)
+    history = graphene.List(graphene.String, samples=graphene.Int())
     logLines = relay.ConnectionField(
         LogLineConnection)
 
@@ -102,6 +105,9 @@ class Run(graphene.ObjectType):
     def resolve_files(self, info, **args):
         return []
 
+    def resolve_tags(self, info, **args):
+        return []
+
     def resolve_fileCount(self, info, **args):
         return 0
 
@@ -109,10 +115,10 @@ class Run(graphene.ObjectType):
         return self.id
 
     def resolve_history(self, info, **args):
-        return History(self.path).read().split("\n")
+        return filter(None, History(self.path).read().split("\n"))
 
     def resolve_events(self, info, **args):
-        return Events(self.path).read().split("\n")
+        return filter(None, Events(self.path).read().split("\n"))
 
     def resolve_logLines(self, info, **args):
         return Log(self.path).lines()
@@ -149,6 +155,7 @@ class Project(graphene.ObjectType):
     views = graphene.JSONString()
     runCount = graphene.Int()
     bucketCount = graphene.Int()
+    requestSubscribe = graphene.Boolean()
 
     runs = relay.ConnectionField(
         RunConnection, entityName=graphene.String(), names=graphene.List(graphene.String),
@@ -195,8 +202,18 @@ class Project(graphene.ObjectType):
         return settings.get_project("views")
 
 
+class ProjectConnection(relay.Connection):
+    class Meta:
+        node = Project
+
+
 class ModelType(Project):
     pass
+
+
+class ModelConnection(relay.Connection):
+    class Meta:
+        node = ModelType
 
 
 class Query(graphene.ObjectType):
@@ -204,6 +221,8 @@ class Query(graphene.ObjectType):
         Project, name=graphene.String(), entityName=graphene.String())
     model = graphene.Field(
         ModelType, name=graphene.String(), entityName=graphene.String())
+    models = relay.ConnectionField(
+        ModelConnection, entityName=graphene.String())
     viewer = graphene.Field(
         UserType
     )
@@ -213,6 +232,9 @@ class Query(graphene.ObjectType):
 
     def resolve_model(self, info, **args):
         return ModelType()
+
+    def resolve_models(self, info, **args):
+        return [ModelType()]
 
     def resolve_viewer(self, info, **args):
         return UserType()

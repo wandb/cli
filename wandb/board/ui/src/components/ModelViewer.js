@@ -1,9 +1,7 @@
 import React from 'react';
 import Markdown from './Markdown';
-import DownloadModal from './DownloadModal';
 import ModelHeader from './ModelHeader';
 import Runs from '../containers/Runs';
-import Jobs from '../containers/Jobs';
 
 class ModelViewer extends React.Component {
   static defaultProps = {
@@ -16,49 +14,47 @@ class ModelViewer extends React.Component {
   };
 
   render() {
-    var {entityName, model, user, condensed, match} = this.props;
+    var {project, condensed, match} = this.props;
 
-    return (
+    let ModelInfo = (
       <div>
         <ModelHeader {...this.props} />
-        <Markdown content={model.description} />
-        {!condensed &&
-        model.bucketCount === 0 && (
-          <Markdown
-            content={`
-### Sync runs to this project with the wandb module:
-~~~bash
-$ pip install wandb
-$ cd training_dir
-$ wandb init
-$ vi train.py
-$ > import wandb
-$ > wandb.init()
-$ wandb run train.py
-~~~
-
-<br/>
-
-Visit our [documentation](http://docs.wandb.com/) for more information.
-        `}
+        <Markdown content={project.description} />
+      </div>
+    );
+    return (
+      <div>
+        {!condensed && project.bucketCount === 0 ? (
+          <div>
+            {ModelInfo}
+            <br />
+            <h4>No runs for this project yet.</h4>
+            <p>New to wandb?</p>
+            <ol>
+              <li>
+                Visit the getting started{' '}
+                <a href="https://docs.wandb.com/docs/started.html">
+                  documentation.
+                </a>
+              </li>
+              <li>
+                Take a look at a few{' '}
+                <a href="https://docs.wandb.com/docs/examples.html">
+                  example projects.
+                </a>
+              </li>
+            </ol>
+          </div>
+        ) : (
+          <Runs
+            ModelInfo={ModelInfo}
+            project={project}
+            match={match}
+            embedded={true}
+            jobFilter={this.state.jobId}
+            limit={10}
+            requestSubscribe={true}
           />
-        )}
-        {/*!condensed && (
-          <div style={{marginTop: 30, width: '100%'}}>
-            <Jobs model={model} match={match} onSelect={this.onJobSelect} />
-          </div>
-        )*/}
-        {!condensed &&
-        model.bucket.name !== 'tmp' && (
-          <div style={{marginTop: 30, width: '100%'}}>
-            <Runs
-              model={model}
-              match={match}
-              embedded={true}
-              jobFilter={this.state.jobId}
-              limit={10}
-            />
-          </div>
         )}
       </div>
     );

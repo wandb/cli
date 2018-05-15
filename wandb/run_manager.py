@@ -1,51 +1,67 @@
 import errno
-import psutil
+import json
+import logging
 import os
+import psutil
+import re
 import signal
 import socket
 import stat
 import subprocess
 import sys
 import time
-import re
 from tempfile import NamedTemporaryFile
-from watchdog.observers import Observer
-from watchdog.events import PatternMatchingEventHandler
-from shortuuid import ShortUUID
-from .config import Config
-import logging
 import threading
+import yaml
+import numbers
 
+import click
+from shortuuid import ShortUUID
 import six
 from six.moves import queue
-import click
+import requests
+from watchdog.observers import Observer
+from watchdog.events import PatternMatchingEventHandler
+import webbrowser
 
 import wandb
+import wandb.api
+from .api import BinaryFilePolicy, CRDedupeFilePolicy, DefaultFilePolicy
+from wandb import env
 from wandb import Error
 from wandb import io_wrap
+from wandb import jsonlfile
 from wandb import file_pusher
+from wandb import meta
+import wandb.rwlock
 from wandb import sparkline
 from wandb import stats
 from wandb import streaming_log
 from wandb import util
+from wandb import wandb_config as config
 from wandb import wandb_run
 from wandb import wandb_socket
-from wandb import meta
-import wandb.api
-from .api import BinaryFilePolicy, CRDedupeFilePolicy
+
+
 logger = logging.getLogger(__name__)
 
 
 OUTPUT_FNAME = 'output.log'
 
 
+class LaunchError(Error):
+    """Raised when there's an error starting up."""
+
+
 class FileTailer(object):
-    def __init__(self, path, on_read_fn, binary=False):
+    def __init__(self, path, on_read_fn, binary=False, seek_end=False):
         self._path = path
         mode = 'r'
         if binary:
             mode = 'rb'
         self._file = open(path, mode)
+        if seek_end:
+            self._file.seek(0, 2)  # seek to 0 bytes from end (2 means end)
         self._on_read_fn = on_read_fn
         self._thread = threading.Thread(target=self._thread_body)
         self._thread.start()
@@ -105,8 +121,97 @@ class FileEventHandlerOverwriteDeferred(FileEventHandler):
         self._file_pusher.file_changed(self.save_name, self.file_path)
 
 
+class FileEventHandlerConfig(FileEventHandler):
+    """Set the config instead of uploading the file"""
+    RATE_LIMIT_SECONDS = 30
+
+    def __init__(self, file_path, save_name, api, file_pusher, run, *args, **kwargs):
+        self._api = api
+        super(FileEventHandlerConfig, self).__init__(
+            file_path, save_name, api, *args, **kwargs)
+        self._last_sent = time.time() - self.RATE_LIMIT_SECONDS
+        self._file_pusher = file_pusher
+        self._run = run
+        self._thread = None
+
+    def on_created(self):
+        self._eventually_update()
+
+    def on_modified(self):
+        self._eventually_update()
+
+    def _eventually_update(self):
+        if self._thread:
+            # assume the existing thread will catch this update
+            return
+
+        if time.time() - self._last_sent >= self.RATE_LIMIT_SECONDS:
+            self._update()
+        else:
+            self._thread = threading.Timer(
+                self.RATE_LIMIT_SECONDS, self._thread_update)
+            self._thread.start()
+
+    def _thread_update(self):
+        try:
+            self._update()
+        finally:
+            self._thread = None
+
+    def _update(self):
+        try:
+            config_dict = yaml.load(open(self.file_path))
+        except yaml.parser.ParserError:
+            wandb.termlog(
+                "Unable to parse config file; probably being modified by user process?")
+            return
+
+        # TODO(adrian): ensure the file content will exactly match Bucket.config
+        # ie. push the file content as a string
+        self._api.upsert_run(id=self._run.storage_id, config=config_dict)
+        self._file_pusher.file_changed(
+            self.save_name, self.file_path, copy=True)
+        self._last_sent = time.time()
+
+    def finish(self):
+        if self._thread:
+            self._thread.join()
+            self._thread = None
+
+        self._update()
+
+
+class FileEventHandlerSummary(FileEventHandler):
+    """Set the summary instead of uploading the file"""
+    RATE_LIMIT_SECONDS = 10
+
+    def __init__(self, file_path, save_name, api, file_pusher, run, *args, **kwargs):
+        super(FileEventHandlerSummary, self).__init__(
+            file_path, save_name, api, *args, **kwargs)
+        self._last_sent = time.time() - self.RATE_LIMIT_SECONDS
+        self._run = run
+        self._file_pusher = file_pusher
+
+    def on_created(self):
+        self.on_modified()
+
+    def on_modified(self):
+        if time.time() - self._last_sent >= self.RATE_LIMIT_SECONDS:
+            try:
+                self._last_sent = time.time()
+                json.load(open(self.file_path))
+                self._api.upsert_run(id=self._run.storage_id,
+                                     summary_metrics=open(self.file_path).read())
+            except ValueError:
+                logger.error("Unable to parse summary json")
+
+    def finish(self):
+        self._file_pusher.file_changed(self.save_name, self.file_path)
+
+
 class FileEventHandlerTextStream(FileEventHandler):
     def __init__(self, *args, **kwargs):
+        self._seek_end = kwargs.pop('seek_end', None)
         super(FileEventHandlerTextStream, self).__init__(*args, **kwargs)
         self._tailer = None
 
@@ -129,7 +234,8 @@ class FileEventHandlerTextStream(FileEventHandler):
         def on_read(data):
             pusher.write_string(data)
 
-        self._tailer = FileTailer(self.file_path, on_read)
+        self._tailer = FileTailer(
+            self.file_path, on_read, seek_end=self._seek_end)
 
 
 class FileEventHandlerBinaryStream(FileEventHandler):
@@ -170,6 +276,7 @@ class WriteSerializingFile(object):
         self.lock.acquire()
         try:
             self.f.write(*args, **kargs)
+            self.f.flush()
         finally:
             self.lock.release()
 
@@ -224,7 +331,7 @@ class RunManager(object):
     """Manages a run's process, wraps its I/O, and synchronizes its files.
     """
 
-    def __init__(self, api, run, project=None, tags=[], cloud=True, job_type="train", port=None, program=None):
+    def __init__(self, api, run, project=None, tags=[], cloud=True, job_type="train", port=None):
         self._api = api
         self._run = run
         self._cloud = cloud
@@ -234,34 +341,27 @@ class RunManager(object):
         self._tags = tags
         self._watch_dir = self._run.dir
 
-        logger.debug("Initialized sync for %s/%s", self._project, self._run.id)
-
-        self._handler = PatternMatchingEventHandler()
-        self._handler.on_created = self.on_file_created
-        self._handler.on_modified = self.on_file_modified
-        self.url = self._run.get_url(api)
-        self._observer = Observer()
-
-        self._observer.schedule(self._handler, self._watch_dir, recursive=True)
-
         self._config = run.config
+        self.url = self._run.get_url(api)
 
-        self._stats = stats.Stats()
-        # This starts a thread to write system stats every 30 seconds
-        self._system_stats = stats.SystemStats(run)
-        self._meta = meta.Meta(api, self._run.dir)
-        self._meta.data["jobType"] = job_type
-        if program:
-            self._meta.data["program"] = program
-
-        def push_function(save_name, path):
-            with open(path, 'rb') as f:
-                self._api.push(self._project, {save_name: f}, run=self._run.id,
-                               progress=lambda _, total: self._stats.update_progress(path, total))
-        self._file_pusher = file_pusher.FilePusher(push_function)
+        # We lock this when the backend is down so Watchdog will keep track of all
+        # the file events that happen. Then, when the backend comes back up, we unlock
+        # it so all the outstanding events will get handled properly. Watchdog's queue
+        # only keeps at most one event per file.
+        # Counterintuitively, we use the "reader" locking to guard writes to the W&B
+        # backend, and the "writer" locking to indicate that the backend is down. That
+        # way, users of the W&B API won't block each other, but can all be
+        # blocked by grabbing a "writer" lock.
+        self._file_event_lock = wandb.rwlock.RWLock()
+        # It starts acquired. We release it when we want to allow the events to happen.
+        # (ie. after the Run is successfully created)
+        self._file_event_lock.writer_enters()
 
         self._event_handlers = {}
 
+        self._handler = PatternMatchingEventHandler()
+        self._handler.on_created = self._on_file_created
+        self._handler.on_modified = self._on_file_modified
         self._handler._patterns = [
             os.path.join(self._watch_dir, os.path.normpath('*'))]
         # Ignore hidden files/folders and output.log because we stream it specially
@@ -271,7 +371,21 @@ class RunManager(object):
             os.path.join(self._run.dir, OUTPUT_FNAME)
         ]
 
+        self._observer = Observer()
+        self._observer.schedule(self._handler, self._watch_dir, recursive=True)
+
+        self._stats = stats.Stats()
+        # This starts a thread to write system stats every 30 seconds
+        self._system_stats = stats.SystemStats(run)
+        self._meta = meta.Meta(api, self._run.dir)
+        self._meta.data["jobType"] = job_type
+        if self._run.program:
+            self._meta.data["program"] = self._run.program
+        self._file_pusher = file_pusher.FilePusher(self._push_function)
+
         self._socket = wandb_socket.Client(self._port)
+
+        logger.debug("Initialized sync for %s/%s", self._project, self._run.id)
 
         if self._cloud:
             self._observer.start()
@@ -285,14 +399,87 @@ class RunManager(object):
             self._api.get_file_stream_api().set_file_policy(
                 OUTPUT_FNAME, CRDedupeFilePolicy())
 
+    """ FILE SYNCING / UPLOADING STUFF """
+
+    # TODO: limit / throttle the number of adds / pushes
+    def _on_file_created(self, event):
+        logger.info('file/dir created: %s', event.src_path)
+        if os.path.isdir(event.src_path):
+            return None
+        save_name = os.path.relpath(event.src_path, self._watch_dir)
+        self._file_event_lock.await_readable()
+        self._get_handler(event.src_path, save_name).on_created()
+
+    def _on_file_modified(self, event):
+        logger.info('file/dir modified: %s', event.src_path)
+        if os.path.isdir(event.src_path):
+            return None
+        save_name = os.path.relpath(event.src_path, self._watch_dir)
+        self._file_event_lock.await_readable()
+        self._get_handler(event.src_path, save_name).on_modified()
+
+    def _get_handler(self, file_path, save_name):
+        if not os.path.split(save_name)[0] == "media":
+            # Don't show stats on media files
+            self._stats.update_file(file_path)
+        if save_name not in self._event_handlers:
+            if save_name == 'wandb-history.jsonl':
+                self._event_handlers['wandb-history.jsonl'] = FileEventHandlerTextStream(
+                    file_path, 'wandb-history.jsonl', self._api)
+            elif save_name == 'wandb-events.jsonl':
+                self._event_handlers['wandb-events.jsonl'] = FileEventHandlerTextStream(
+                    file_path, 'wandb-events.jsonl', self._api)
+            # Don't try to stream tensorboard files for now.
+            # elif 'tfevents' in save_name:
+            #    # TODO: This is hard-coded, but we want to give users control
+            #    # over streaming files (or detect them).
+            #    self._api.get_file_stream_api().set_file_policy(save_name,
+            #                                                    BinaryFilePolicy())
+            #    self._event_handlers[save_name] = FileEventHandlerBinaryStream(
+            #        file_path, save_name, self._api)
+            # Overwrite handler (non-deferred) has a bug, wherein if the file is truncated
+            # during upload, the request to Google hangs (at least, this is my working
+            # theory). So for now we defer uploading everything til the end of the run.
+            # TODO: send wandb-summary during run. One option is to copy to a temporary
+            # file before uploading.
+            elif save_name == config.FNAME:
+                self._event_handlers[save_name] = FileEventHandlerConfig(
+                    file_path, save_name, self._api, self._file_pusher, self._run)
+            elif save_name == 'wandb-summary.json':
+                # Load the summary into the syncer process for meta etc to work
+                self._run.summary.load()
+                self._event_handlers[save_name] = FileEventHandlerSummary(
+                    file_path, save_name, self._api, self._file_pusher, self._run)
+            elif save_name.startswith('media/'):
+                # Save media files immediately
+                self._event_handlers[save_name] = FileEventHandlerOverwrite(
+                    file_path, save_name, self._api, self._file_pusher)
+            else:
+                self._event_handlers[save_name] = FileEventHandlerOverwriteDeferred(
+                    file_path, save_name, self._api, self._file_pusher)
+        return self._event_handlers[save_name]
+
+    def _push_function(self, save_name, path):
+        with open(path, 'rb') as f:
+            self._api.push(self._project, {save_name: f}, run=self._run.id,
+                           progress=lambda _, total: self._stats.update_progress(path, total))
+
+    """ RUN MANAGEMENT STUFF """
+
     def _get_stdout_stderr_streams(self):
         """Sets up STDOUT and STDERR streams. Only call this once."""
         if six.PY2:
             stdout = sys.stdout
             stderr = sys.stderr
         else:  # we write binary so grab the raw I/O objects in python 3
-            stdout = sys.stdout.buffer.raw
-            stderr = sys.stderr.buffer.raw
+            try:
+                stdout = sys.stdout.buffer.raw
+                stderr = sys.stderr.buffer.raw
+            except AttributeError:
+                # The testing environment and potentially others may have screwed with their
+                # io so we fallback to raw stdout / err
+                stdout = sys.stdout.buffer
+                stderr = sys.stderr.buffer
 
         output_log_path = os.path.join(self._run.dir, OUTPUT_FNAME)
         self._output_log = WriteSerializingFile(open(output_log_path, 'wb'))
@@ -304,10 +491,12 @@ class RunManager(object):
             # Tee stdout/stderr into our TextOutputStream, which will push lines to the cloud.
             fs_api = self._api.get_file_stream_api()
             self._stdout_stream = streaming_log.TextStreamPusher(
-                fs_api, OUTPUT_FNAME, prepend_timestamp=True)
+                fs_api, OUTPUT_FNAME, prepend_timestamp=True,
+                lock_function=self._file_event_lock.reader_enters)
             self._stderr_stream = streaming_log.TextStreamPusher(
                 fs_api, OUTPUT_FNAME, line_prepend='ERROR',
-                prepend_timestamp=True)
+                prepend_timestamp=True,
+                lock_function=self._file_event_lock.reader_enters)
 
             stdout_streams.append(self._stdout_stream)
             stderr_streams.append(self._stderr_stream)
@@ -336,13 +525,132 @@ class RunManager(object):
             self._stderr_stream.close()
             self._api.get_file_stream_api().finish(exitcode)
 
+    def _setup_resume(self, resume_status):
+        # write the tail of the history file
+        try:
+            history_tail = json.loads(resume_status['historyTail'])
+            jsonlfile.write_jsonl_file(os.path.join(self._run.dir, wandb_run.HISTORY_FNAME),
+                                       history_tail)
+        except ValueError:
+            print("warning: couldn't load recent history")
+
+        # write the tail of the events file
+        try:
+            events_tail = json.loads(resume_status['eventsTail'])
+            jsonlfile.write_jsonl_file(os.path.join(self._run.dir, wandb_run.EVENTS_FNAME),
+                                       events_tail)
+        except ValueError:
+            print("warning: couldn't load recent events")
+
+        # Note: these calls need to happen after writing the files above. Because the access
+        # to self._run.events below triggers events to initialize, but we need the previous
+        # events to be written before that happens.
+
+        # output.log
+        self._api.get_file_stream_api().set_file_policy(
+            OUTPUT_FNAME, CRDedupeFilePolicy(resume_status['logLineCount']))
+
+        # history
+        self._api.get_file_stream_api().set_file_policy(
+            wandb_run.HISTORY_FNAME, DefaultFilePolicy(
+                start_chunk_id=resume_status['historyLineCount']))
+        self._event_handlers[wandb_run.HISTORY_FNAME] = FileEventHandlerTextStream(
+            self._run.history.fname, wandb_run.HISTORY_FNAME, self._api, seek_end=True)
+
+        # events
+        self._api.get_file_stream_api().set_file_policy(
+            wandb_run.EVENTS_FNAME, DefaultFilePolicy(
+                start_chunk_id=resume_status['eventsLineCount']))
+        self._event_handlers[wandb_run.EVENTS_FNAME] = FileEventHandlerTextStream(
+            self._run.events.fname, wandb_run.EVENTS_FNAME, self._api, seek_end=True)
+
+    def init_run(self, env=None):
+        if self._cloud:
+            storage_id = None
+            if self._run.resume != 'never':
+                resume_status = self._api.run_resume_status(project=self._api.settings("project"),
+                                                            entity=self._api.settings(
+                                                                "entity"),
+                                                            name=self._run.id)
+                if resume_status == None and self._run.resume == 'must':
+                    raise LaunchError(
+                        "resume='must' but run (%s) doesn't exist" % self._run.id)
+                if resume_status:
+                    print('Resuming run: %s' % self._run.id)
+                    self._setup_resume(resume_status)
+                    storage_id = resume_status['id']
+
+            if self._api.git.enabled:
+                commit = self._api.git.last_commit
+            else:
+                commit = None
+
+            if not self._upsert_run(False, storage_id, commit, env):
+                self._upsert_run_thread = threading.Thread(
+                    target=self._upsert_run, args=(True, storage_id, commit, env))
+                self._upsert_run_thread.daemon = True
+                self._upsert_run_thread.start()
+
+    def _upsert_run(self, retry, storage_id, commit, env):
+        """Upsert the Run (ie. for the first time with all its attributes)
+
+        Arguments:
+            retry: (bool) Whether to retry if the connection fails (ie. if the backend is down).
+                False is useful so we can start running the user process even when the W&B backend
+                is down, and let syncing finish later.
+        Returns:
+            True if the upsert succeeded, False if it failed because the backend is down.
+        Throws:
+            LaunchError on other failures
+        """
+        if retry:
+            num_retries = None
+        else:
+            num_retries = 0  # no retries because we want to let the user process run even if the backend is down
+
+        try:
+            upsert_result = self._api.upsert_run(id=storage_id,
+                                                 commit=commit,
+                                                 name=self._run.id,
+                                                 project=self._api.settings(
+                                                     "project"),
+                                                 entity=self._api.settings(
+                                                     "entity"),
+                                                 config=self._run.config.as_dict(),
+                                                 description=self._run.description,
+                                                 host=self._run.host,
+                                                 program_path=self._run.program,
+                                                 repo=self._api.repo_remote_url(),
+                                                 sweep_name=self._run.sweep_id,
+                                                 num_retries=num_retries)
+        except wandb.api.CommError as e:
+            # TODO: Get rid of str contains check
+            if self._run.resume == 'never' and 'exists' in str(e):
+                raise LaunchError(
+                    "resume='never' but run (%s) exists" % self._run.id)
+            else:
+                if isinstance(e.exc, requests.exceptions.ConnectionError):
+                    wandb.termerror(
+                        'Failed to connect to W&B. Retrying in the background.')
+                    return False
+
+                raise LaunchError(
+                    'Launch exception: {}, see {} for details'.format(e, util.get_log_file_path()))
+
+        self._run.storage_id = upsert_result['id']
+        self._run.set_environment(environment=env)
+
+        # unblock file syncing and console streaming, which need the Run to have a .storage_id
+        self._file_event_lock.writer_leaves()
+
+        return True
+
     def run_user_process(self, program, args, env):
         """Launch a user process, capture its output, and sync its files to the backend.
 
         This returns after the process has ended and syncing is done.
         Captures ctrl-c's, signals, etc.
         """
-
         stdout_streams, stderr_streams = self._get_stdout_stderr_streams()
 
         if sys.platform == "win32":
@@ -365,13 +673,15 @@ class RunManager(object):
         runner = util.find_runner(program)
         if runner:
             command = runner + command
+        command = ' '.join(six.moves.shlex_quote(arg) for arg in command)
 
         try:
             self.proc = subprocess.Popen(
                 command,
                 env=env,
                 stdout=self._stdout_tee.tee_file,
-                stderr=self._stderr_tee.tee_file
+                stderr=self._stderr_tee.tee_file,
+                shell=True,
             )
         except (OSError, IOError):
             raise Exception('Could not find program: %s' % command)
@@ -392,6 +702,13 @@ class RunManager(object):
 
         self.proc = Process(pid)
 
+        try:
+            self.init_run()
+        except LaunchError as e:
+            wandb.termerror(str(e))
+            self._socket.launch_error()
+            return
+
         # Signal the main process that we're all hooked up
         self._socket.ready()
 
@@ -408,6 +725,9 @@ class RunManager(object):
         except AttributeError:  # SIGQUIT doesn't exist on windows
             pass
 
+        if env.get_show_run():
+            webbrowser.open_new_tab(self._run.get_url(self._api))
+
         exitcode = None
         try:
             while True:
@@ -421,7 +741,7 @@ class RunManager(object):
                     break
                 elif len(res) > 0:
                     wandb.termerror(
-                        "Invalid message received from child process: %s" % str(res).encode("hex"))
+                        "Invalid message received from child process: %s" % str(res))
                     break
                 else:
                     exitcode = self.proc.poll()
@@ -430,20 +750,23 @@ class RunManager(object):
                     time.sleep(1)
         except KeyboardInterrupt:
             exitcode = 255
-            wandb.termlog('Ctrl-c pressed; waiting for program to end.')
-            keyboard_interrupt_time = time.time()
-            if not headless:
-                # give the process a couple of seconds to die, then kill it
-                while self.proc.poll() is None and (time.time() - keyboard_interrupt_time) < 2:
-                    time.sleep(0.1)
+            if headless:
+                wandb.termlog('Ctrl-c pressed.')
+            else:
+                wandb.termlog(
+                    'Ctrl-c pressed; waiting for program to end. Press ctrl-c again to kill it.')
+                try:
+                    while self.proc.poll() is None:
+                        time.sleep(0.1)
+                except KeyboardInterrupt:
+                    pass
+
                 if self.proc.poll() is None:
                     wandb.termlog('Program still alive. Killing it.')
                     try:
                         self.proc.kill()
                     except OSError:
                         pass
-
-        self._close_stdout_stderr_streams(exitcode or 254)
 
         """TODO(adrian): garbage that appears in the logs sometimes
 
@@ -475,29 +798,35 @@ class RunManager(object):
             self._meta.data["state"] = "failed"
         self._meta.shutdown()
         self._system_stats.shutdown()
+        self._close_stdout_stderr_streams(exitcode)
 
         # If we're not syncing to the cloud, we're done
         if not self._cloud:
-            self._socket.done()
             return None
 
         # Show run summary/history
-        if self._run.has_summary:
-            summary = self._run.summary.summary
+        self._run.summary.load()
+        summary = self._run.summary._summary
+        if len(summary):
             wandb.termlog('Run summary:')
             max_len = max([len(k) for k in summary.keys()])
             format_str = '  {:>%s} {}' % max_len
             for k, v in summary.items():
                 wandb.termlog(format_str.format(k, v))
-        if self._run.has_history:
-            history_keys = self._run.history.keys()
+
+        self._run.history.load()
+        history_keys = self._run.history.keys()
+        if len(history_keys):
             wandb.termlog('Run history:')
             max_len = max([len(k) for k in history_keys])
             for key in history_keys:
                 vals = util.downsample(self._run.history.column(key), 40)
+                if any((not isinstance(v, numbers.Number) for v in vals)):
+                    continue
                 line = sparkline.sparkify(vals)
                 format_str = u'  {:>%s} {}' % max_len
                 wandb.termlog(format_str.format(key, line))
+
         if self._run.has_examples:
             wandb.termlog('Saved %s examples' % self._run.examples.count())
 
@@ -587,52 +916,3 @@ class RunManager(object):
             wandb.termerror('Sync failed %s' % self.url)
         else:
             wandb.termlog('Synced %s' % self.url)
-
-        if headless:
-            self._socket.done()
-
-    def _get_handler(self, file_path, save_name):
-        self._stats.update_file(file_path)
-        if save_name not in self._event_handlers:
-            if save_name == 'wandb-history.jsonl':
-                self._event_handlers['wandb-history.jsonl'] = FileEventHandlerTextStream(
-                    file_path, 'wandb-history.jsonl', self._api)
-            elif save_name == 'wandb-events.jsonl':
-                self._event_handlers['wandb-events.jsonl'] = FileEventHandlerTextStream(
-                    file_path, 'wandb-events.jsonl', self._api)
-            # Don't try to stream tensorboard files for now.
-            # elif 'tfevents' in save_name:
-            #    # TODO: This is hard-coded, but we want to give users control
-            #    # over streaming files (or detect them).
-            #    self._api.get_file_stream_api().set_file_policy(save_name,
-            #                                                    BinaryFilePolicy())
-            #    self._event_handlers[save_name] = FileEventHandlerBinaryStream(
-            #        file_path, save_name, self._api)
-            # Overwrite handler (non-deferred) has a bug, wherein if the file is truncated
-            # during upload, the request to Google hangs (at least, this is my working
-            # theory). So for now we defer uploading everything til the end of the run.
-            # TODO: send wandb-summary during run. One option is to copy to a temporary
-            # file before uploading.
-            elif save_name == 'wandb-summary.json':
-                # Load the summary into the syncer process for meta etc to work
-                self._run.summary.load()
-                self._event_handlers[save_name] = FileEventHandlerOverwrite(
-                    file_path, save_name, self._api, self._file_pusher)
-            else:
-                self._event_handlers[save_name] = FileEventHandlerOverwriteDeferred(
-                    file_path, save_name, self._api, self._file_pusher)
-        return self._event_handlers[save_name]
-
-    # TODO: limit / throttle the number of adds / pushes
-    def on_file_created(self, event):
-        if os.path.isdir(event.src_path):
-            return None
-        save_name = os.path.relpath(event.src_path, self._watch_dir)
-        self._get_handler(event.src_path, save_name).on_created()
-
-    # TODO: is this blocking the main thread?
-    def on_file_modified(self, event):
-        if os.path.isdir(event.src_path):
-            return None
-        save_name = os.path.relpath(event.src_path, self._watch_dir)
-        self._get_handler(event.src_path, save_name).on_modified()

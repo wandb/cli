@@ -2,10 +2,7 @@ import gql from 'graphql-tag';
 
 export const fragments = {
   basicRun: gql`
-    fragment BasicRunFragment on BucketType {
-      id
-      name
-      config
+    fragment BasicRunFragment on Run {
       framework
       description
       createdAt
@@ -15,16 +12,19 @@ export const fragments = {
       host
       state
       shouldStop
+      groupCounts
       sweep {
         name
       }
-      summaryMetrics
-      systemMetrics
+      user {
+        username
+        photoUrl
+      }
+      tags
     }
   `,
   detailedRun: gql`
-    fragment DetailedRunFragment on BucketType {
-      id
+    fragment DetailedRunFragment on Run {
       history
       events
       exampleTableColumns
@@ -53,20 +53,24 @@ export const fragments = {
       }
     }
   `,
-  historyRun: gql`
-    fragment HistoryRunFragment on BucketType {
-      history
+  selectRun: gql`
+    fragment SelectRunFragment on Run {
+      config
+      summaryMetrics
+      systemMetrics
     }
   `,
-  // This is not actually stored on the server, we manually write/read from the cache to track
-  // it's loading state.
-  historyRunLoading: gql`
-    fragment HistoryRunLoadingFragment on BucketType {
-      historyLoading
+  historyRun: gql`
+    fragment HistoryRunFragment on Run {
+      history(samples: 500)
     }
   `,
 };
 
+// Some weirdness here. If a fragment is disabled by a skip/include directive,
+// quiver/graphene will remove the fields in the fragment. Order matters, whatever
+// the last fragment to be included/skipped says goes. We must include __typename
+// above fragments or it ends up getting removed.
 export const RUNS_QUERY = gql`
   query ModelRuns(
     $cursor: String
@@ -74,11 +78,19 @@ export const RUNS_QUERY = gql`
     $entityName: String
     $jobKey: String
     $order: String
-    $limit: Int = 10000
+    $filters: JSONString
+    $limit: Int = 1000
     $bucketIds: [String]
+    $requestSubscribe: Boolean!
+    $selectEnable: Boolean = true
+    $basicEnable: Boolean = true
     $history: Boolean = false
+    $fields: [String]
+    $historyFields: [String]
+    $groupKeys: [String]
+    $groupLevel: Int
   ) {
-    model(name: $name, entityName: $entityName) {
+    project(name: $name, entityName: $entityName) {
       id
       name
       createdAt
@@ -86,39 +98,29 @@ export const RUNS_QUERY = gql`
       description
       summaryMetrics
       views
-      sweeps {
-        edges {
-          node {
-            id
-            name
-            createdAt
-            heartbeatAt
-            updatedAt
-            description
-            state
-            runCount
-            user {
-              username
-              photoUrl
-            }
-          }
-        }
-      }
-      buckets(
+      requestSubscribe @include(if: $requestSubscribe)
+      runCount(filters: $filters)
+      runs(
         first: $limit
         after: $cursor
         jobKey: $jobKey
         order: $order
         names: $bucketIds
+        filters: $filters
+        fields: $fields
+        historyFields: $historyFields
+        groupKeys: $groupKeys
+        groupLevel: $groupLevel
       ) {
+        paths
         edges {
           node {
-            ...BasicRunFragment
+            id
+            name
+            __typename
+            ...SelectRunFragment @include(if: $selectEnable)
+            ...BasicRunFragment @include(if: $basicEnable)
             ...HistoryRunFragment @include(if: $history)
-            user {
-              username
-              photoUrl
-            }
           }
         }
         pageInfo {
@@ -137,20 +139,76 @@ export const RUNS_QUERY = gql`
     }
   }
   ${fragments.basicRun}
+  ${fragments.selectRun}
   ${fragments.historyRun}
 `;
 
+export const PROJECT_QUERY = gql`
+  query Project(
+    $name: String!
+    $entityName: String
+    $filters: JSONString
+    $selections: JSONString
+  ) {
+    project(name: $name, entityName: $entityName) {
+      id
+      name
+      createdAt
+      entityName
+      description
+      views
+      requestSubscribe
+      runCount(filters: "{}")
+      filteredCount: runCount(filters: $filters)
+      selectedCount: runCount(filters: $selections)
+    }
+  }
+`;
+
 export const RUN_UPSERT = gql`
-  mutation upsertRun($id: String, $description: String) {
-    upsertBucket(input: {id: $id, description: $description}) {
+  mutation upsertRun($id: String, $description: String, $tags: [String!]) {
+    upsertBucket(input: {id: $id, description: $description, tags: $tags}) {
       bucket {
         id
         name
         description
+        tags
       }
       inserted
     }
   }
+`;
+
+export const MODIFY_RUNS = gql`
+  mutation modifyRuns(
+    $filters: JSONString
+    $entityName: String
+    $projectName: String
+    $addTags: [String]
+  ) {
+    modifyRuns(
+      input: {
+        filters: $filters
+        entityName: $entityName
+        projectName: $projectName
+        addTags: $addTags
+      }
+    ) {
+      runsSQL {
+        id
+        name
+        __typename
+        ...SelectRunFragment
+        ...BasicRunFragment
+        user {
+          username
+          photoUrl
+        }
+      }
+    }
+  }
+  ${fragments.selectRun}
+  ${fragments.basicRun}
 `;
 
 export const RUN_DELETION = gql`
@@ -187,9 +245,9 @@ export const LAUNCH_RUN = gql`
 
 export const HISTORY_QUERY = gql`
   query RunHistory($name: String!, $entityName: String, $bucketIds: [String]) {
-    model(name: $name, entityName: $entityName) {
+    project(name: $name, entityName: $entityName) {
       id
-      buckets(first: 10000, names: $bucketIds) {
+      runs(first: 10000, names: $bucketIds) {
         edges {
           node {
             id
@@ -203,10 +261,10 @@ export const HISTORY_QUERY = gql`
 `;
 
 export const FAKE_HISTORY_QUERY = gql`
-  query FakeRunHistory {
-    model {
+  query FakeRunHistory($histQueryKey: String!) {
+    project(key: $histQueryKey) {
       id
-      buckets {
+      runs {
         edges {
           node {
             id

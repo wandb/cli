@@ -9,8 +9,9 @@ export const MODEL_QUERY = gql`
     $bucketName: String!
     $upload: Boolean
     $detailed: Boolean!
+    $requestSubscribe: Boolean = false
   ) {
-    model(name: $name, entityName: $entityName) {
+    project(name: $name, entityName: $entityName) {
       id
       name
       entityName
@@ -19,9 +20,14 @@ export const MODEL_QUERY = gql`
       bucketCount
       access
       summaryMetrics
-      bucket(name: $bucketName) {
+      run(name: $bucketName) {
+        id
+        name
+        __typename
+        ...SelectRunFragment
         ...BasicRunFragment
         ...DetailedRunFragment @include(if: $detailed)
+        requestSubscribe @include(if: $requestSubscribe)
       }
       views
     }
@@ -33,6 +39,7 @@ export const MODEL_QUERY = gql`
       defaultFramework
     }
   }
+  ${runFragments.selectRun}
   ${runFragments.basicRun}
   ${runFragments.detailedRun}
 `;
@@ -58,6 +65,14 @@ export const MODEL_UPSERT = gql`
         views: $views
       }
     ) {
+      project {
+        id
+        name
+        entityName
+        description
+        access
+        views
+      }
       model {
         id
         name
@@ -81,7 +96,7 @@ export const MODEL_DELETION = gql`
 
 export const MODELS_QUERY = gql`
   query Models($cursor: String, $entityName: String) {
-    models(first: 100, after: $cursor, entityName: $entityName) {
+    models(first: 300, after: $cursor, entityName: $entityName) {
       edges {
         node {
           id

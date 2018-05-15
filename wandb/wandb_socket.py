@@ -1,32 +1,35 @@
 import six
 import time
-import logging
+import json
 import socket
 from select import select
 import threading
-
-logger = logging.getLogger(__name__)
 
 
 def ints2bytes(ints):
     return six.b('').join([six.int2byte(i) for i in ints])
 
 
+CODE_READY = 1
+CODE_DONE = 2
+CODE_LAUNCH_ERROR = 100
+
+
 class Server(object):
     """A simple socket server started in the user process.  It binds to a port
-    assigned by the OS.  It must receive a message from the wandb process within
-    5 seconds of calling connect to be established.
+    assigned by the OS.
 
     Wire Protocol:
     1 => ready
     2 => done, followed by optional exitcode byte
+    100 => launch error
     """
 
     def __init__(self):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.bind(('', 0))
         self.socket.listen(1)
-        self.socket.settimeout(5.0)
+        self.socket.settimeout(30)
         self.port = self.socket.getsockname()[1]
         self.connection = None
 
@@ -42,15 +45,26 @@ class Server(object):
         conn, _, err = select([self.connection], [], [
                               self.connection], max_seconds)
         try:
-            res = bytearray(self.connection.recv(2))
-            if res[0] in [1, 2]:
-                return True
+            message = b''
+            while True:
+                res = self.connection.recv(1024)
+                term = res.find(b'\0')
+                if term != -1:
+                    message += res[:term]
+                    break
+                else:
+                    message += res
+            message = json.loads(message.decode('utf8'))
+            if message['status'] == 'done':
+                return True, None
+            elif message['status'] == 'ready':
+                return True, message
+            elif message['status'] == 'launch_error':
+                return False, None
             else:
                 raise socket.error()
         except socket.error as e:
-            logger.error(
-                "Failed to receive valid message from wandb process within %s seconds" % max_seconds)
-            return False
+            return False, None
 
     def done(self, exitcode=None):
         data = [2]
@@ -79,8 +93,7 @@ class Client(object):
             self.connected = False
 
     def send(self, data):
-        if isinstance(data, list):
-            data = ints2bytes(data)
+        data = json.dumps(data).encode('utf8') + b'\0'
         if self.connected:
             self.socket.sendall(data)
 
@@ -90,12 +103,8 @@ class Client(object):
         else:
             return bytearray()
 
-    def done(self):
-        try:
-            self.send([2])
-        except socket.error:
-            logger.warn(
-                "Wandb took longer than 30 seconds and the user process finished")
-
     def ready(self):
-        self.send([1])
+        self.send({'status': 'ready'})
+
+    def launch_error(self):
+        self.send({'status': 'launch_error'})

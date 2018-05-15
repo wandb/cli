@@ -1,19 +1,39 @@
 import React from 'react';
-import {connect} from 'react-redux';
-import {bindActionCreators} from 'redux';
 import _ from 'lodash';
-import {Button, Card, Dropdown, Grid, Header, Popup} from 'semantic-ui-react';
+import {Button, Card, Dropdown, Grid, Icon, Segment} from 'semantic-ui-react';
 import {panelClasses} from '../util/registry.js';
+import QueryEditor from '../components/QueryEditor';
+import {sortRuns} from '../util/runhelpers.js';
+import * as Query from '../util/query.js';
+import withRunsDataLoader from '../containers/RunsDataLoader';
+import ContentLoader from 'react-content-loader';
 
 import './PanelRunsLinePlot';
 import './PanelLinePlot';
+import './PanelImages';
 import './PanelScatterPlot';
 import './PanelParallelCoord';
 
-class Panel extends React.Component {
-  state = {configMode: false};
+export default class Panel extends React.Component {
+  state = {configMode: false, showQuery: false};
+  static loading = (
+    <Segment basic style={{minHeight: 260}}>
+      <ContentLoader height={85} />
+    </Segment>
+  );
 
-  renderPanelType(PanelType, configMode, config, data, sizeKey) {
+  renderPanelType(
+    PanelType,
+    configMode,
+    config,
+    data,
+    sizeKey,
+    panelQuery,
+    currentHeight
+  ) {
+    if (!data) {
+      return Panel.loading;
+    }
     return (
       <div style={{clear: 'both'}}>
         <PanelType
@@ -21,47 +41,43 @@ class Panel extends React.Component {
           config={config}
           updateConfig={this.props.updateConfig}
           sizeKey={sizeKey}
+          panelQuery={panelQuery}
+          currentHeight={currentHeight}
           data={data}
         />
       </div>
     );
   }
 
-  componentDidMount() {
-    // This happens when a new panel is added, go straight to configMode
-    if (!this.props.config) {
-      this.setState({configMode: true});
-    }
-  }
-
   render() {
     let {type, size, config, data} = this.props;
+    let panel, PanelType, configMode, options, sizeKey;
     if (!data) {
-      return <p>Views unavailable until data is ready.</p>;
+      panel = Panel.loading;
+    } else {
+      options = _.keys(panelClasses)
+        .filter(type => panelClasses[type].validForData(data))
+        .map(type => ({text: type, value: type}));
+      if (options.length === 0) {
+        panel = Panel.loading;
+      } else {
+        type = type || options[0].value;
+        config = config || {};
+        PanelType = panelClasses[type] || panelClasses[_.keys(panelClasses)[0]];
+        configMode = this.props.editMode;
+        size = PanelType.options.width
+          ? {width: PanelType.options.width}
+          : size || {width: 8};
+        sizeKey = size.width;
+      }
     }
-    let options = _.keys(panelClasses)
-      .filter(type => panelClasses[type].validForData(data))
-      .map(type => ({text: type, value: type}));
-    if (options.length === 0) {
-      return <p>Views unavailable until data is ready.</p>;
-    }
-    type = type || options[0].value;
-    config = config || {};
-    let PanelType = panelClasses[type];
-    let configMode = this.props.editMode;
-    size = PanelType.options.width
-      ? {width: PanelType.options.width}
-      : size || {width: 8};
 
-    let sizeKey = size.width;
-
-    if (this.props.editMode) {
-      return (
-        <Grid.Column width={size.width}>
-          <Card fluid>
-            <Card.Content>
-              <Button.Group basic floated="right">
-                {/*
+    if (!panel && this.props.editMode) {
+      panel = (
+        <div className={this.props.className}>
+          {!this.props.noButtons && (
+            <Button.Group basic floated="right">
+              {/*
                 <Button
                   icon="settings"
                   circular
@@ -69,53 +85,71 @@ class Panel extends React.Component {
                   onClick={() =>
                     this.setState({configMode: !this.state.configMode})}
                   />*/}
-                {!PanelType.options.width && (
-                  <Button
-                    icon={size.width == 8 ? 'expand' : 'compress'}
-                    circular
-                    size="tiny"
-                    onClick={() => {
-                      let newWidth = size.width == 8 ? 16 : 8;
-                      this.props.updateSize({width: newWidth});
-                    }}
-                  />
-                )}
+              {!PanelType.options.width && (
                 <Button
-                  icon="close"
+                  icon={size.width === 8 ? 'expand' : 'compress'}
                   circular
                   size="tiny"
-                  onClick={() => this.props.removePanel()}
-                />
-              </Button.Group>
-              {configMode && (
-                <Dropdown
-                  placeholder="Panel Type"
-                  selection
-                  options={options}
-                  value={type}
-                  onChange={(e, {value}) => this.props.updateType(value)}
-                  style={{marginBottom: 12}}
+                  onClick={() => {
+                    let newWidth = size.width === 8 ? 16 : 8;
+                    this.props.updateSize({width: newWidth});
+                  }}
                 />
               )}
-              {this.renderPanelType(
-                PanelType,
-                configMode,
-                config,
-                data,
-                sizeKey,
-              )}
-            </Card.Content>
-          </Card>
-        </Grid.Column>
+              <Button
+                icon="close"
+                circular
+                size="tiny"
+                onClick={() => this.props.removePanel()}
+              />
+            </Button.Group>
+          )}
+          {configMode && (
+            <Dropdown
+              placeholder="Panel Type"
+              selection
+              options={options}
+              value={type}
+              onChange={(e, {value}) => {
+                this.props.updateType(value);
+              }}
+              style={{marginBottom: 12, zIndex: 21}}
+            />
+          )}
+          {configMode &&
+            (this.props.viewType === 'dashboards' ||
+              this.props.viewType === 'runs') && (
+              <QueryEditor
+                defaultEntity={this.props.pageQuery.entity}
+                defaultProject={Query.project(this.props.pageQuery)}
+                query={this.props.panelQuery}
+                mergeFilters={this.props.pageQuery.filters || null}
+                allowProjectChange={this.props.viewType === 'dashboards'}
+                setQuery={this.props.updateQuery}
+                runCount={this.props.data.totalRuns}
+              />
+            )}
+          {this.renderPanelType(
+            PanelType,
+            configMode,
+            config,
+            data,
+            sizeKey,
+            this.props.panelQuery
+          )}
+        </div>
       );
-    } else {
-      return (
-        <Grid.Column width={size.width}>
-          {this.renderPanelType(PanelType, configMode, config, data, sizeKey)}
-        </Grid.Column>
+    } else if (!panel) {
+      panel = this.renderPanelType(
+        PanelType,
+        configMode,
+        config,
+        data,
+        sizeKey,
+        this.props.panelQuery,
+        this.props.currentHeight
       );
     }
+    return <div className={this.props.className}>{panel}</div>;
   }
 }
-
-export default Panel;

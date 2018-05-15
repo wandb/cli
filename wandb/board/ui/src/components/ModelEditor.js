@@ -1,5 +1,5 @@
 import React from 'react';
-import {Dropdown, Menu, Header, Button, Form} from 'semantic-ui-react';
+import {Button, Form} from 'semantic-ui-react';
 import DangerModal from './DangerModal';
 import Markdown from './Markdown';
 import Breadcrumbs from './Breadcrumbs';
@@ -9,16 +9,16 @@ class ModelEditor extends React.Component {
     super(props);
     this.state = {
       preview: false,
-      name: props.model.name || '',
-      framework: props.model.framework || props.viewer.defaultFramework,
-      access: props.model.access || 'ENTITY_WRITE',
-      content: props.model.description || '',
+      name: props.project.name || '',
+      framework: props.project.framework || props.viewer.defaultFramework,
+      access: props.project.access || 'ENTITY_WRITE',
+      content: props.project.description || '',
       canSubmit: false,
     };
   }
 
   static defaultProps = {
-    model: {},
+    project: {},
   };
 
   componentDidUpdate() {
@@ -29,9 +29,9 @@ class ModelEditor extends React.Component {
     if (!this.state.canSubmit) {
       this.setState({
         preview: props.preview,
-        framework: props.model.framework,
-        name: props.model.name || '',
-        content: props.model.description,
+        framework: props.project.framework,
+        name: props.project.name || '',
+        content: props.project.description,
       });
     }
   }
@@ -62,6 +62,8 @@ class ModelEditor extends React.Component {
         return 'Team readable';
       case 'PRIVATE':
         return 'Private';
+      default:
+        return;
     }
   }
 
@@ -69,8 +71,8 @@ class ModelEditor extends React.Component {
     return (
       <Form className="ui form">
         <Breadcrumbs
-          entity={this.props.model.entityName}
-          model={this.props.model.name}
+          entity={this.props.project.entityName}
+          model={this.props.project.name}
         />
         <Form.Field className="model_name">
           <label>Name</label>
@@ -95,7 +97,8 @@ class ModelEditor extends React.Component {
                 this.setState({
                   canSubmit: true,
                   content: e.target.value,
-                })}
+                })
+              }
               placeholder="Provide a description about this project"
               value={this.state.content}
             />
@@ -123,7 +126,8 @@ class ModelEditor extends React.Component {
               this.setState({
                 access: d.value,
                 canSubmit: d.value !== this.state.framework,
-              })}
+              })
+            }
           />
         )}
         <Button.Group>
@@ -133,7 +137,7 @@ class ModelEditor extends React.Component {
           <Button.Or />
           <Button
             disabled={!this.state.canSubmit}
-            content={this.props.model.id ? 'Update' : 'Create'}
+            content={this.props.project.id ? 'Update' : 'Create'}
             color="blue"
             onClick={e => {
               e.preventDefault();
@@ -143,10 +147,10 @@ class ModelEditor extends React.Component {
                   description: this.state.content,
                   framework: this.state.framework,
                   access: this.state.access,
-                  id: this.props.model.id,
+                  id: this.props.project.id,
                   name: this.state.name,
                   entityName:
-                    this.props.entityName || this.props.model.entityName,
+                    this.props.entityName || this.props.project.entityName,
                 })
                 .then(res => {
                   if (res.data.upsertModel.inserted) {
@@ -158,8 +162,11 @@ class ModelEditor extends React.Component {
                     if (this.props.addModel)
                       this.props.addModel(res.data.upsertModel.model);
                   } else {
-                    window.location.href = `/${this.props.model
-                      .entityName}/${res.data.upsertModel.model.name}`;
+                    this.props.history.push(
+                      `/${this.props.project.entityName}/${
+                        res.data.upsertModel.model.name
+                      }`,
+                    );
                   }
                 });
             }}
@@ -167,11 +174,10 @@ class ModelEditor extends React.Component {
         </Button.Group>
 
         <Button.Group size="small" floated="right">
-          {this.admin() &&
-          this.props.model.id && (
+          {this.props.project.id && (
             <DangerModal
               button={{negative: true, icon: 'trash'}}
-              yes={() => this.props.delete(this.props.model.id)}
+              yes={() => this.props.delete(this.props.project.id)}
             />
           )}
         </Button.Group>

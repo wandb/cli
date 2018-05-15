@@ -40,7 +40,8 @@ import os
 try:
     import pty
     import tty
-except ModuleNotFoundError:  # windows
+    import termios
+except ImportError:  # windows
     pass
 
 import subprocess
@@ -63,8 +64,12 @@ class Tee(object):
     @classmethod
     def pty(cls, sync_dst_file, *async_dst_files):
         master_fd, slave_fd = pty.openpty()
-        # raw mode so carriage returns etc. don't get added by the terminal driver
-        tty.setraw(master_fd)
+        # raw mode so carriage returns etc. don't get added by the terminal driver,
+        # bash for windows blows up on this so we catch the error and do nothing
+        try:
+            tty.setraw(master_fd)
+        except termios.error:
+            pass
         master = os.fdopen(master_fd, 'rb')
         tee = cls(master, sync_dst_file, *async_dst_files)
         tee.tee_file = os.fdopen(slave_fd, 'wb')
@@ -202,17 +207,13 @@ class FileRedirector(object):
         self.redir_file.flush()  # flush library buffers that dup2 knows nothing about
         os.dup2(self._to_fd, self._from_fd)  # $ exec >&to
 
-    '''
-    This isn't tested properly:
+    #This isn't tested properly:
     def restore(self):
         """Restore `self.redir_file` to its original state.
-
-        This function may only be called once.
         """
         #NOTE: dup2 makes `self._from_fd` inheritable unconditionally
         self.redir_file.flush()
         os.dup2(self.orig_file.fileno(), self._from_fd)  # $ exec >&copied
         #self.orig_file.close()
         #self.orig_file = None
-        self.redir_file = None
-    '''
+        #self.redir_file = None

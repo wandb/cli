@@ -3,10 +3,14 @@
   font-family: monospace;
 }
 
+.logs.ui.loading.segment:before {
+  background: none;
+}
 .logs .ui.ordered.list > .item:before {
   margin-left: -3rem;
 }
 .logs .ui.ordered.list {
+  margin-left: 1rem;
   white-space: nowrap;
 }
 .logs .ui.ordered.list .item.error {

@@ -4,12 +4,7 @@ import {
   TOGGLE_RUN_SELECTION,
   UPDATE_RUN_SELECTIONS,
   UPDATE_JOB,
-  UPDATE_LOSS,
-  ADD_FILTER,
-  DELETE_FILTER,
-  EDIT_FILTER,
-  SET_FILTER_COMPONENT,
-  CLEAR_FILTERS,
+  SET_FILTERS,
   SET_COLUMNS,
   TOGGLE_COLUMN,
   ENABLE_COLUMN,
@@ -18,10 +13,9 @@ import {
   CURRENT_PAGE,
   SET_HIGHLIGHT,
 } from '../actions/run.js';
+import * as Query from '../util/query';
 
-let nextFilterID = 0,
-  nextPlotID = 0,
-  filters;
+let nextFilterID = 0;
 
 export default function runs(
   state = {
@@ -51,70 +45,13 @@ export default function runs(
         selected[run] = true;
       });
       return {...state, selected: selected};
-    case UPDATE_LOSS:
-      return {...state, [action.id]: action.loss};
     case UPDATE_JOB:
       return {...state, currentJob: action.id};
-    case ADD_FILTER:
-      // We just change the value if we already have filter for this key/op
-      let filter = _.find(
-        state.filters[action.kind],
-        (filter, filterID) =>
-          filter.key.section == action.key.section &&
-          filter.key.value == action.key.value &&
-          filter.op == action.op,
-      );
-      if (action.value === null) {
-        // Remove filter if value is null
-        if (!filter) {
-          return state;
-        } else {
-          return update(state, {
-            filters: {[action.kind]: {$unset: [filter.id]}},
-          });
-        }
-      }
-      let filterID;
-      if (filter) {
-        filterID = filter.id;
-      } else {
-        filterID = nextFilterID;
-        nextFilterID++;
-      }
-      return update(state, {
-        filters: {
-          [action.kind]: {
-            [filterID]: {
-              $set: {
-                id: filterID,
-                key: action.key,
-                op: action.op,
-                value: action.value,
-              },
-            },
-          },
-        },
+    case SET_FILTERS:
+      let result = update(state, {
+        filters: {[action.kind]: {$set: action.filters}},
       });
-    case DELETE_FILTER:
-      return update(state, {filters: {[action.kind]: {$unset: [action.id]}}});
-    case EDIT_FILTER:
-      return update(state, {
-        editingFilter: {$set: action.id},
-      });
-    case SET_FILTER_COMPONENT:
-      return update(state, {
-        filters: {
-          [action.kind]: {
-            [action.id]: {[action.component]: {$set: action.value}},
-          },
-        },
-      });
-    case CLEAR_FILTERS:
-      nextFilterID = 0;
-      return update(state, {
-        filterModel: {$set: action.filterModel},
-        filters: {$set: {filter: {}, select: {}}},
-      });
+      return result;
     case SET_HIGHLIGHT:
       return update(state, {highlight: {$set: action.runId}});
     case SET_COLUMNS:

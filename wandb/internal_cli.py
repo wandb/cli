@@ -3,10 +3,13 @@
 """
 
 import json
+import logging
 import os
 import socket
 import sys
+import time
 
+import wandb
 import wandb.api
 import wandb.run_manager
 import wandb.wandb_run
@@ -17,8 +20,8 @@ def headless(args):
     process to watch an already-running user process. It's like
     `wandb run` for a user process that has already started.
 
-    In this situation the GQL Run has already been created in
-    `wandb.init()`.
+    The user process that calls this waits for a signal that
+    everything is ready, which is sent at the end of rm.wrap_existing_process
     """
     user_process_pid = args['pid']
     stdout_master_fd = args['stdout_master_fd']
@@ -31,7 +34,7 @@ def headless(args):
 
     rm = wandb.run_manager.RunManager(
         api, run, cloud=args['cloud'], job_type=args['job_type'],
-        port=args['port'], program=args['program'])
+        port=args['port'])
     rm.wrap_existing_process(
         user_process_pid, stdout_master_fd, stderr_master_fd)
 
@@ -80,7 +83,11 @@ def agent_run(args):
         rm.run_user_process(args['program'], args['args'], env)
 
 
+
+
 def main():
+    wandb.try_to_set_up_logging()
+
     args = json.loads(sys.argv[1])
     command = args['command']
     if command == 'headless':

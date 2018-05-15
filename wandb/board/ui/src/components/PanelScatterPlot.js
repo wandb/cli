@@ -2,24 +2,14 @@ import React from 'react';
 import {connect} from 'react-redux';
 import {bindActionCreators} from 'redux';
 import _ from 'lodash';
-import {
-  Button,
-  Card,
-  Dropdown,
-  Grid,
-  Form,
-  Header,
-  Popup,
-} from 'semantic-ui-react';
-import {color} from '../util/colors.js';
+import {Form, Loader} from 'semantic-ui-react';
 import {registerPanelClass} from '../util/registry.js';
 import {
   convertValue,
-  displayValue,
   getRunValue,
-  displayFilterKey,
   filterKeyFromString,
   filtersForAxis,
+  scatterPlotCandidates,
 } from '../util/runhelpers.js';
 import {
   XAxis,
@@ -27,18 +17,18 @@ import {
   FlexibleWidthXYPlot,
   VerticalGridLines,
   HorizontalGridLines,
-  XYPlot,
   MarkSeries,
   VerticalRectSeries,
   Hint,
 } from 'react-vis';
-import {batchActions} from 'redux-batched-actions';
 import '../../node_modules/react-vis/dist/style.css';
 import BoxSelection from './vis/BoxSelection';
-import {addFilter, setHighlight} from '../actions/run';
+import {setFilters, setHighlight} from '../actions/run';
+import * as Selection from '../util/selections';
+import * as Run from '../util/runs';
 
 class ScatterPlotPanel extends React.Component {
-  static type = 'ScatterPlot';
+  static type = 'Scatter Plot';
   static options = {
     width: 8,
   };
@@ -58,15 +48,32 @@ class ScatterPlotPanel extends React.Component {
     let {xAxis, yAxis, zAxis} = nextProps.config;
     if (nextProps.selections !== props.selections) {
       if (xAxis) {
-        this.xSelect = filtersForAxis(nextProps.selections, xAxis);
+        this.xSelect = Selection.bounds(
+          nextProps.selections,
+          Run.keyFromString(xAxis)
+        );
       }
       if (yAxis) {
-        this.ySelect = filtersForAxis(nextProps.selections, yAxis);
+        this.ySelect = Selection.bounds(
+          nextProps.selections,
+          Run.keyFromString(yAxis)
+        );
       }
       if (zAxis) {
-        this.zSelect = filtersForAxis(nextProps.selections, zAxis);
+        this.zSelect = Selection.bounds(
+          nextProps.selections,
+          Run.keyFromString(zAxis)
+        );
       }
     }
+  }
+
+  _scatterPlotOptions() {
+    return this.props.data.keys.map((name, i) => ({
+      text: name,
+      key: name,
+      value: name,
+    }));
   }
 
   componentWillMount() {
@@ -81,51 +88,86 @@ class ScatterPlotPanel extends React.Component {
   }
 
   renderConfig() {
-    let {base, filtered, keys, axisOptions} = this.props.data;
+    let axisOptions = this._scatterPlotOptions(); //this.props.data;
     return (
-      <Form>
-        <Form.Dropdown
-          label="X-Axis"
-          placeholder="X-Axis"
-          fluid
-          search
-          selection
-          options={axisOptions}
-          value={this.props.config.xAxis}
-          onChange={(e, {value}) =>
-            this.props.updateConfig({...this.props.config, xAxis: value})}
-        />
-        <Form.Dropdown
-          label="Y-Axis"
-          placeholder="Y-Axis"
-          fluid
-          search
-          selection
-          options={axisOptions}
-          value={this.props.config.yAxis}
-          onChange={(e, {value}) =>
-            this.props.updateConfig({...this.props.config, yAxis: value})}
-        />
-        <Form.Dropdown
-          label="Z-Axis (Color)"
-          placeholder="Z-Axis"
-          fluid
-          search
-          selection
-          options={axisOptions}
-          value={this.props.config.zAxis}
-          onChange={(e, {value}) =>
-            this.props.updateConfig({...this.props.config, zAxis: value})}
-        />
-      </Form>
+      <div>
+        {(!axisOptions || axisOptions.length == 0) &&
+          (this.props.data.filtered.length == 0 ? (
+            <div class="ui negative message">
+              <div class="header">No Runs</div>
+              This project doesn't have any runs yet, or you have filtered all
+              of the runs. To create a run, check out the getting started
+              documentation.
+              <a href="https://docs.wandb.com/docs/started.html">
+                https://docs.wandb.com/docs/started.html
+              </a>.
+            </div>
+          ) : (
+            <div class="ui negative message">
+              <div class="header">
+                No useful configuration or summary metrics for Scatter Plot.
+              </div>
+              Scatter plot needs numeric configuration or summary metrics with
+              more than one value. You don't have any of those yet. To learn
+              more about collecting summary metrics check out our documentation
+              at
+              <a href="https://docs.wandb.com/docs/logs.html">
+                https://docs.wandb.com/docs/logs.html
+              </a>.
+            </div>
+          ))}
+        <Form>
+          <Form.Dropdown
+            label="X-Axis"
+            placeholder="X-Axis"
+            fluid
+            search
+            selection
+            options={axisOptions}
+            value={this.props.config.xAxis}
+            onChange={(e, {value}) =>
+              this.props.updateConfig({...this.props.config, xAxis: value})
+            }
+          />
+          <Form.Dropdown
+            label="Y-Axis"
+            placeholder="Y-Axis"
+            fluid
+            search
+            selection
+            options={axisOptions}
+            value={this.props.config.yAxis}
+            onChange={(e, {value}) =>
+              this.props.updateConfig({...this.props.config, yAxis: value})
+            }
+          />
+          <Form.Dropdown
+            label="Z-Axis (Color)"
+            placeholder="Z-Axis"
+            fluid
+            search
+            selection
+            options={axisOptions}
+            value={this.props.config.zAxis}
+            onChange={(e, {value}) =>
+              this.props.updateConfig({...this.props.config, zAxis: value})
+            }
+          />
+        </Form>
+      </div>
     );
-    return;
   }
 
   renderNormal() {
     let {xAxis, yAxis, zAxis} = this.props.config;
 
-    if (this.props.data.filtered.length && xAxis && yAxis) {
+    if (this.props.data.loading) {
+      return (
+        <div>
+          <Loader inline active />
+        </div>
+      );
+    } else if (this.props.data.filtered.length && xAxis && yAxis) {
       let data = this.props.data.filtered
         .map(run => {
           let point = {
@@ -139,7 +181,6 @@ class ScatterPlotPanel extends React.Component {
           return point;
         })
         .filter(point => point.x && point.y);
-      let zMin, zMax;
       let gradientData = [];
       if (zAxis) {
         data = data.filter(point => point.color);
@@ -162,10 +203,19 @@ class ScatterPlotPanel extends React.Component {
       }
       let highlight = _.find(
         data,
-        point => point.runId === this.props.highlight,
+        point => point.runId === this.props.highlight
       );
+      const totalRuns = this.props.data.totalRuns;
+      const maxRuns = this.props.data.limit;
       return (
         <div>
+          <div style={{float: 'right', marginRight: 15}}>
+            {totalRuns > maxRuns && (
+              <span style={{fontSize: 13}}>
+                Showing {maxRuns} of {totalRuns} filtered runs{' '}
+              </span>
+            )}
+          </div>
           {zAxis && (
             <div>
               <FlexibleWidthXYPlot height={55}>
@@ -178,39 +228,40 @@ class ScatterPlotPanel extends React.Component {
               </FlexibleWidthXYPlot>
             </div>
           )}
-          <FlexibleWidthXYPlot height={300}>
+          <FlexibleWidthXYPlot
+            height={(this.props.currentHeight || 240) - (zAxis ? 55 : 0)}>
             <VerticalGridLines />
             <HorizontalGridLines />
             <BoxSelection
               xSelect={this.xSelect}
               ySelect={this.ySelect}
               onSelectChange={(xSelect, ySelect) => {
-                this.props.batchActions([
-                  addFilter(
-                    'select',
-                    filterKeyFromString(xAxis),
-                    '>',
-                    xSelect.low,
-                  ),
-                  addFilter(
-                    'select',
-                    filterKeyFromString(xAxis),
-                    '<',
-                    xSelect.high,
-                  ),
-                  addFilter(
-                    'select',
-                    filterKeyFromString(yAxis),
-                    '>',
-                    ySelect.low,
-                  ),
-                  addFilter(
-                    'select',
-                    filterKeyFromString(yAxis),
-                    '<',
-                    ySelect.high,
-                  ),
-                ]);
+                let selections = this.props.selections;
+                selections = Selection.Update.addBound(
+                  selections,
+                  Run.keyFromString(xAxis),
+                  '>=',
+                  xSelect.low
+                );
+                selections = Selection.Update.addBound(
+                  selections,
+                  Run.keyFromString(xAxis),
+                  '<=',
+                  xSelect.high
+                );
+                selections = Selection.Update.addBound(
+                  selections,
+                  Run.keyFromString(yAxis),
+                  '>=',
+                  ySelect.low
+                );
+                selections = Selection.Update.addBound(
+                  selections,
+                  Run.keyFromString(yAxis),
+                  '<=',
+                  ySelect.high
+                );
+                this.props.setFilters('select', selections);
               }}
             />
             <XAxis title={xAxis} />
@@ -222,12 +273,12 @@ class ScatterPlotPanel extends React.Component {
               onValueMouseOut={value => this.props.setHighlight(null)}
             />
             {highlight &&
-            highlight.color && (
-              <Hint
-                value={highlight}
-                format={point => [{title: 'ID', value: point.runId}]}
-              />
-            )}
+              highlight.color && (
+                <Hint
+                  value={highlight}
+                  format={point => [{title: 'ID', value: point.runId}]}
+                />
+              )}
           </FlexibleWidthXYPlot>
         </div>
       );
@@ -258,11 +309,11 @@ function mapStateToProps(state, ownProps) {
 }
 
 const mapDispatchToProps = (dispatch, ownProps) => {
-  return bindActionCreators({batchActions, setHighlight}, dispatch);
+  return bindActionCreators({setFilters, setHighlight}, dispatch);
 };
 
 let ConnectScatterPlotPanel = connect(mapStateToProps, mapDispatchToProps)(
-  ScatterPlotPanel,
+  ScatterPlotPanel
 );
 ConnectScatterPlotPanel.type = ScatterPlotPanel.type;
 ConnectScatterPlotPanel.options = ScatterPlotPanel.options;

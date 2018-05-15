@@ -1,16 +1,20 @@
 import ApolloClient from 'apollo-client';
-import {ApolloLink} from 'apollo-link';
+import {ApolloLink, Observable} from 'apollo-link';
 import {InMemoryCache} from 'apollo-cache-inmemory';
 import {createHttpLink} from 'apollo-link-http';
 import {onError} from 'apollo-link-error';
 import {displayError, setFlash} from '../actions';
 import {push} from 'react-router-redux';
 import queryString from 'query-string';
+import {BOARD} from './board';
+
+import * as hash from 'hash.js';
 
 let dispatch = null;
 
 const SERVERS = {
   production: 'https://api.wandb.ai/quiver',
+  beta: 'https://api.wandb.ai/quiver',
   // development: 'http://gql.test/graphql',
   development: 'http://gql.test/quiver',
   devprod: 'https://api.wandb.ai/quiver',
@@ -25,27 +29,36 @@ export const SERVER =
 const httpLink = createHttpLink({uri: SERVER});
 
 const authMiddleware = new ApolloLink((operation, forward) => {
-  //The signup flow accepts a token
-  let qs = queryString.parse(document.location.search);
-  let token = qs.token || localStorage.getItem('id_token');
+  if (BOARD) return forward(operation);
+  return new Observable(observable => {
+    let sub = null;
+    this.c._auth.jwt().then(t => {
+      //The signup flow accepts a token
+      let qs = queryString.parse(document.location.search);
+      let token = qs.token || t;
 
-  if (token) {
-    operation.setContext(({headers = {}}) => ({
-      headers: {
-        ...headers,
-        authorization: `Bearer ${token}`,
-      },
-    }));
-  }
+      if (token) {
+        operation.setContext(({headers = {}}) => ({
+          headers: {
+            ...headers,
+            authorization: `Bearer ${token}`,
+          },
+        }));
+      }
 
-  return forward(operation);
+      sub = forward(operation).subscribe(observable);
+    });
+    //TODO: I think this is always null...
+    return () => (sub ? sub.unsubscribe() : null);
+  });
 });
 
 const stackdriverMiddleware = new ApolloLink((operation, forward) => {
   let qs = queryString.parse(document.location.search);
 
   if (qs.trace) {
-    let count = parseInt(localStorage.getItem('request_count'));
+    console.log('DOING TRACE');
+    let count = parseInt(localStorage.getItem('request_count'), 10);
     operation.setContext(({headers = {}}) => ({
       headers: {
         ...headers,
@@ -62,23 +75,23 @@ const stackdriverMiddleware = new ApolloLink((operation, forward) => {
 const userTimingMiddleware = new ApolloLink((operation, forward) => {
   const uuid = localStorage.getItem('page_id');
   return forward(operation).map(data => {
-    if (window.performance) {
+    if (window.performance && !BOARD) {
       setTimeout(() => {
         try {
           window.performance.mark(uuid + '-end');
           window.performance.measure(
             operation.operationName,
             uuid + '-start',
-            uuid + '-end',
+            uuid + '-end'
           );
           const measure = window.performance.getEntriesByName(
-            operation.operationName,
+            operation.operationName
           )[0];
           window.ga(
             'send',
             'timing',
             operation.operationName,
-            measure.duration,
+            measure.duration
           );
         } catch (e) {
           console.warn('unable to time pageview', e);
@@ -90,28 +103,43 @@ const userTimingMiddleware = new ApolloLink((operation, forward) => {
 });
 
 const errorLink = onError(({networkError, graphQLErrors}, store) => {
+  let errorMessage = 'Application Error';
+  let errorCode = 500;
+  let messaged = false;
   if (graphQLErrors) {
-    graphQLErrors.map(error => {
+    errorMessage = '';
+    graphQLErrors.forEach(error => {
       let {message, code} = error;
       if (code === 401) {
         localStorage.removeItem('id_token');
         if (document.location.pathname !== '/login') {
-          localStorage.setItem('redirect', document.location.pathname);
+          localStorage.setItem('redirect', document.location.href);
         }
+        messaged = true;
         dispatch(push('/login'));
       } else {
-        console.error(`GraphQL error ${message} (${code}):`);
-        dispatch(displayError(error));
+        errorMessage += message;
+        errorCode = code;
       }
     });
+    if (!messaged) {
+      messaged = true;
+      dispatch(displayError({message: errorMessage, code: errorCode}));
+    }
   }
-  if (networkError) {
-    console.error(`Network Error: ${networkError}`);
+  if (!messaged && networkError) {
     if (networkError.result) {
       console.error(networkError.result.errors);
+    } else if (networkError.message === 'Failed to fetch') {
+      errorMessage = 'Network Error';
     }
 
-    dispatch(setFlash({message: 'Backend Unavailable', color: 'red'}));
+    dispatch(
+      displayError({
+        code: networkError.statusCode || 503,
+        message: errorMessage,
+      })
+    );
   }
 });
 
@@ -123,10 +151,36 @@ const link = ApolloLink.from([
   httpLink,
 ]);
 
+// Unfortuantely we need to make every run object unique. This is because we do multiple
+// queries for runs with different config/summary_metrics/event selections on the Runs page.
+// Those are JSONString fields, so apollo just goes with the newest version of each one.
+// A better option would probably be to merge the query result into the apollo cache ourselves
+// so we only have one object per run.
+// We're including keys and values here currently. Could achieve the same effect with less memory
+// overhead by only hashing keys, but we'd have to JSON parse.
+function dataIdFromObject(object) {
+  // The object.logLines check is even hackier. We only fetch logLines on the run page, and we
+  // do want to use the apollo cache there so that our real time updates work.
+  // UGH
+  if (object.__typename === 'Run' && object.logLines == null) {
+    const extra = hash
+      .sha1()
+      .update(
+        (object.config || '') +
+          (object.summaryMetrics || '') +
+          (object.systemMetrics || '') +
+          (object.history && object.history.length > 0 ? object.history[0] : '')
+      )
+      .digest('hex');
+    return object.id + extra;
+  }
+  return object.id;
+}
+
 const apolloClient = new ApolloClient({
   link: link,
   cache: new InMemoryCache({
-    dataIdFromObject: object => object.id,
+    dataIdFromObject: dataIdFromObject,
   }),
 });
 

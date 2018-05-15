@@ -1,49 +1,52 @@
 import React from 'react';
 import {graphql, compose, withApollo} from 'react-apollo';
 import {
-  Accordion,
+  Checkbox,
+  Confirm,
   Container,
-  Header,
+  Dropdown,
   Button,
   Grid,
   Icon,
+  Input,
   Popup,
-  Tab,
-  Segment,
   Transition,
 } from 'semantic-ui-react';
 import RunFeed from '../components/RunFeed';
-import RunFilters from '../components/RunFilters';
+import RunFiltersRedux from './RunFiltersRedux';
 import RunColumnsSelector from '../components/RunColumnsSelector';
-import withHistoryLoader from '../components/HistoryLoader';
-import Views from '../components/Views';
+import RunFeedConfig from '../components/RunFeedConfig';
+import ViewModifier from './ViewModifier';
 import HelpIcon from '../components/HelpIcon';
-import {RUNS_QUERY} from '../graphql/runs';
+import {PROJECT_QUERY, MODIFY_RUNS} from '../graphql/runs';
 import {MODEL_UPSERT} from '../graphql/models';
-import {NavLink} from 'react-router-dom';
 import {connect} from 'react-redux';
 import queryString from 'query-string';
 import _ from 'lodash';
 import {
-  sortableValue,
-  getRunValue,
-  getRunValueFromFilterKey,
-  filterRuns,
   sortRuns,
-  filterToString,
-  filterFromString,
-  displayFilterKey,
-  runDisplayName,
   defaultViews,
+  parseBuckets,
+  setupKeySuggestions,
 } from '../util/runhelpers.js';
 import {MAX_HISTORIES_LOADED} from '../util/constants.js';
 import {bindActionCreators} from 'redux';
-import {clearFilters, addFilter, setColumns} from '../actions/run';
-import {setServerViews, setActiveView} from '../actions/view';
-import {JSONparseNaN} from '../util/jsonnan';
+import {setColumns, setFilters} from '../actions/run';
+import {
+  resetViews,
+  setServerViews,
+  setBrowserViews,
+  setActiveView,
+  addView,
+  updateRunsTable,
+} from '../actions/view';
 import update from 'immutability-helper';
-import flatten from 'flat';
 import {BOARD} from '../util/board';
+import withRunsDataLoader from '../containers/RunsDataLoader';
+import withRunsQueryRedux from '../containers/RunsQueryRedux';
+import * as Filter from '../util/filters';
+import * as Selection from '../util/selections';
+import * as Query from '../util/query';
 
 class Runs extends React.Component {
   state = {showFailed: false, activeTab: 0, showFilters: false};
@@ -56,57 +59,28 @@ class Runs extends React.Component {
     this.props.refetch({order: [column, order].join(' ')});
   };
 
-  _setupViewData(props) {
-    this.viewData = {
-      base: props.runs,
-      filtered: this.filteredRuns,
-      filteredRunsById: this.filteredRunsById,
-      keys: props.keySuggestions,
-      axisOptions: this.axisOptions,
-      histories: this.runHistories,
-    };
-  }
-
-  _setupFilteredRuns(props) {
-    this.filteredRuns = sortRuns(
-      props.sort,
-      filterRuns(props.runFilters, props.runs),
-    );
-    this.filteredRunsById = {};
-    for (var run of this.filteredRuns) {
-      this.filteredRunsById[run.name] = run;
+  _updateQueryFromProps(query, props) {
+    if (!_.isEmpty(props.runFilters)) {
+      query.filters = Filter.toURL(props.runFilters);
     }
-    let keys = _.flatMap(props.keySuggestions, section => section.suggestions);
-    this.axisOptions = keys.map(key => {
-      let displayKey = displayFilterKey(key);
-      return {
-        key: displayKey,
-        value: displayKey,
-        text: displayKey,
-      };
-    });
-    this._setupViewData(props);
+    if (!_.isEmpty(props.runSelections)) {
+      query.selections = Filter.toURL(props.runSelections);
+    }
+    if (!_.isNil(props.activeView)) {
+      query.activeView = props.activeView;
+    }
   }
 
-  _setupRunHistories(props) {
-    this.historyKeys = _.uniq(
-      _.flatMap(
-        _.uniq(
-          _.flatMap(
-            props.runHistory,
-            o => (o.history ? o.history.map(row => _.keys(row)) : []),
-          ),
-        ),
-      ),
+  _shareableUrl(props) {
+    let query = {};
+    this._updateQueryFromProps(query, props);
+    return (
+      `${window.location.protocol}//${window.location.host}${
+        window.location.pathname
+      }` +
+      '?' +
+      queryString.stringify(query)
     );
-    this.runHistories = {
-      loading: props.runHistory.some(o => !o.history),
-      maxRuns: MAX_HISTORIES_LOADED,
-      totalRuns: _.keys(props.selectedRuns).length,
-      data: props.runHistory.filter(o => o.history),
-      keys: this.historyKeys,
-    };
-    this._setupViewData(props);
   }
 
   _setUrl(props, nextProps) {
@@ -116,15 +90,7 @@ class Runs extends React.Component {
       props.activeView !== nextProps.activeView
     ) {
       let query = queryString.parse(window.location.search) || {};
-      if (!_.isEmpty(nextProps.runFilters)) {
-        query.filter = _.values(nextProps.runFilters).map(filterToString);
-      }
-      if (!_.isEmpty(nextProps.runSelections)) {
-        query.select = _.values(nextProps.runSelections).map(filterToString);
-      }
-      if (!_.isNil(nextProps.activeView)) {
-        query.activeView = nextProps.activeView;
-      }
+      this._updateQueryFromProps(query, nextProps);
       let url = `/${nextProps.match.params.entity}/${
         nextProps.match.params.model
       }/runs`;
@@ -140,34 +106,56 @@ class Runs extends React.Component {
     if (!parsed) {
       return;
     }
-    let readFilters = kind => {
-      if (parsed[kind]) {
-        if (!_.isArray(parsed[kind])) {
-          parsed[kind] = [parsed[kind]];
-        }
-        let filters = parsed[kind].map(filterFromString);
-        filters = filters.filter(filter => filter);
-        for (var filter of filters) {
-          this.props.addFilter(kind, filter.key, filter.op, filter.value);
-        }
-        return filters;
+    let filterFilters;
+    if (parsed.filters) {
+      filterFilters = Filter.fromURL(parsed.filters);
+    } else if (parsed.filter) {
+      let filts = parsed.filter;
+      if (!_.isArray(filts)) {
+        filts = [filts];
       }
-      return [];
-    };
-    readFilters('filter');
-    let selectFilters = readFilters('select');
-    if (selectFilters.length === 0) {
-      this.props.addFilter('select', {section: 'run', value: 'id'}, '=', '*');
+      filterFilters = Filter.fromOldURL(filts);
     }
+    let selectFilters;
+    if (parsed.selections) {
+      selectFilters = Filter.fromURL(parsed.selections);
+    } else if (parsed.select) {
+      let filts = parsed.select;
+      if (!_.isArray(filts)) {
+        filts = [filts];
+      }
+      selectFilters = Filter.fromOldURL(filts);
+    }
+
+    if (filterFilters) {
+      this.props.setFilters('filter', filterFilters);
+    } else {
+      this.props.setFilters('filter', {
+        op: 'OR',
+        filters: [
+          {
+            op: 'AND',
+            filters: [
+              {key: {section: 'tags', name: 'hidden'}, op: '=', value: false},
+            ],
+          },
+        ],
+      });
+    }
+
+    if (selectFilters) {
+      this.props.setFilters('select', selectFilters);
+    } else {
+      this.props.setFilters('select', Selection.all());
+    }
+
     if (!_.isNil(parsed.activeView)) {
-      this.props.setActiveView('runs', parseInt(parsed.activeView));
+      this.props.setActiveView('runs', parseInt(parsed.activeView, 10));
     }
   }
 
   componentWillMount() {
-    this.props.clearFilters();
-    this._setupFilteredRuns(this.props);
-    this._setupRunHistories(this.props);
+    this.filtersReady = false;
     this._readUrl(this.props);
   }
 
@@ -178,55 +166,45 @@ class Runs extends React.Component {
   }
 
   componentWillReceiveProps(nextProps) {
-    if (
-      !this.doneLoading &&
-      nextProps.loading === false &&
-      nextProps.runs.length > 0
-    ) {
-      this.doneLoading = true;
-      let defaultColumns = {
-        Description: true,
-        Ran: true,
-        Runtime: true,
-        _ConfigAuto: true,
-        Sweep: _.indexOf(nextProps.columnNames, 'Sweep') !== -1,
-      };
-      let summaryColumns = nextProps.columnNames.filter(col =>
-        _.startsWith(col, 'summary'),
-      );
-      for (var col of summaryColumns) {
-        defaultColumns[col] = true;
-      }
-      this.props.setColumns(defaultColumns);
-    }
+    // We set the filters in componentWillMount, and need to wait for a redux pass
+    // before we actually have them. This flag is used to delay the runs table
+    // query until we've received the set filters.
+    this.filtersReady = true;
+    // Columns selction is disabled now, everything is automatic. We can re-enable
+    // if someone asks for it.
+    // if (
+    //   !this.doneLoading &&
+    //   nextProps.loading === false &&
+    //   nextProps.data.base.length > 0
+    // ) {
+    //   this.doneLoading = true;
+    //   let defaultColumns = {
+    //     Description: true,
+    //     Ran: true,
+    //     Runtime: true,
+    //     _ConfigAuto: true,
+    //     Sweep: _.indexOf(nextProps.data.columnNames, 'Sweep') !== -1,
+    //   };
+    //   let summaryColumns = nextProps.data.columnNames.filter(col =>
+    //     _.startsWith(col, 'summary')
+    //   );
+    //   for (var col of summaryColumns) {
+    //     defaultColumns[col] = true;
+    //   }
+    //   this.props.setColumns(defaultColumns);
+    // }
     // Setup views loaded from server.
     if (
-      (nextProps.views === null || !nextProps.views.runs) &&
-      _.isEmpty(this.props.reduxServerViews.runs.views) &&
-      _.isEmpty(this.props.reduxBrowserViews.runs.views)
-    ) {
-      // no views on server, provide a default
-      this.props.setServerViews(
-        defaultViews(nextProps.runs || this.props.runs),
-        true,
-      );
-    } else if (
       nextProps.views &&
       nextProps.views.runs &&
       !_.isEqual(nextProps.views, this.props.reduxServerViews)
     ) {
+      if (
+        _.isEqual(this.props.reduxServerViews, this.props.reduxBrowserViews)
+      ) {
+        this.props.setBrowserViews(nextProps.views);
+      }
       this.props.setServerViews(nextProps.views);
-    }
-
-    if (
-      nextProps.runFilters !== this.props.runFilters ||
-      nextProps.runs !== this.props.runs ||
-      nextProps.sort !== this.props.sort
-    ) {
-      this._setupFilteredRuns(nextProps);
-    }
-    if (nextProps.runHistory !== this.props.runHistory) {
-      this._setupRunHistories(nextProps);
     }
 
     this._setUrl(this.props, nextProps);
@@ -236,31 +214,57 @@ class Runs extends React.Component {
     this.setState({activeTab: activeIndex});
 
   render() {
+    let ModelInfo = this.props.ModelInfo;
+    const filterCount = Filter.countIndividual(this.props.runFilters);
     return (
-      <Container>
+      <div>
+        <Confirm
+          open={this.state.showConfirm}
+          onCancel={this.state.handleCancel}
+          onConfirm={this.state.handleConfirm}
+          content={this.state.confirmText}
+          confirmButton={this.state.confirmButton}
+        />
         <Grid>
-          <Grid.Row>
-            <Grid.Column>
-              <p
-                style={{cursor: 'pointer'}}
-                onClick={() =>
-                  this.setState({showFilters: !this.state.showFilters})
-                }>
-                <Icon
-                  rotated={this.state.showFilters ? null : 'counterclockwise'}
-                  name="dropdown"
+          <Grid.Row divided columns={2}>
+            <Grid.Column>{ModelInfo}</Grid.Column>
+            <Grid.Column textAlign="right">
+              <p style={{marginBottom: '.5em'}}>
+                <Popup
+                  content={
+                    <Input
+                      style={{minWidth: 520}}
+                      value={this._shareableUrl(this.props)}
+                    />
+                  }
+                  style={{width: '100%'}}
+                  on="click"
+                  position="bottom right"
+                  wide="very"
+                  trigger={
+                    <Button
+                      style={{marginRight: 6}}
+                      icon="linkify"
+                      size="mini"
+                    />
+                  }
                 />
-                {_.keys(this.props.runFilters).length == 0 &&
-                _.keys(this.props.runSelections).length == 0
-                  ? 'Filters / Selections'
-                  : _.keys(this.props.runFilters).length +
-                    ' Filters / ' +
-                    _.keys(this.props.runSelections).length +
-                    ' Selections'}
+                {this.props.counts.runs} total runs,{' '}
+                {this.props.counts.filtered} filtered,{' '}
+                {this.props.counts.selected} selected
               </p>
               <p>
-                {this.props.runs.length} total runs, {this.filteredRuns.length}{' '}
-                filtered, {_.keys(this.props.selectedRuns).length} selected
+                <span
+                  style={{cursor: 'pointer'}}
+                  onClick={() =>
+                    this.setState({showFilters: !this.state.showFilters})
+                  }>
+                  <Icon
+                    rotated={this.state.showFilters ? null : 'counterclockwise'}
+                    name="dropdown"
+                  />
+                  {filterCount + ' Filter' + (filterCount === 1 ? '' : 's')}
+                </span>
               </p>
             </Grid.Column>
           </Grid.Row>
@@ -277,27 +281,12 @@ class Runs extends React.Component {
                         Filters{' '}
                         <HelpIcon text="Filters limit the set of runs that will be displayed in charts and tables on this page." />
                       </h5>
-                      <RunFilters
+                      <RunFiltersRedux
+                        entityName={this.props.match.params.entity}
+                        projectName={this.props.match.params.model}
                         kind="filter"
                         buttonText="Add Filter"
-                        keySuggestions={this.props.keySuggestions}
-                        runs={this.props.runs}
-                      />
-                    </Grid.Column>
-                  </Grid.Row>
-                )}
-                {this.state.showFilters && (
-                  <Grid.Row>
-                    <Grid.Column width={16}>
-                      <h5 style={{marginBottom: 6}}>
-                        Selections
-                        <HelpIcon text="Selections control highlighted regions on charts, the runs displayed on History charts, and which runs are checked in the table." />
-                      </h5>
-                      <RunFilters
-                        kind="select"
-                        buttonText="Add Selection"
-                        keySuggestions={this.props.keySuggestions}
-                        runs={this.props.runs}
+                        filteredRunsCount={this.props.counts.filtered}
                       />
                     </Grid.Column>
                   </Grid.Row>
@@ -305,174 +294,195 @@ class Runs extends React.Component {
               </Transition.Group>
             </Grid.Column>
           </Grid.Row>
-          <Grid.Column width={16}>
-            <Views
-              viewType="runs"
-              data={this.viewData}
-              updateViews={views =>
-                this.props.updateModel({
-                  entityName: this.props.match.params.entity,
-                  name: this.props.match.params.model,
-                  id: this.props.projectID,
-                  views: views,
-                })
-              }
-            />
-          </Grid.Column>
+          {
+            <Grid.Column width={16}>
+              {this.props.haveViews && (
+                <ViewModifier
+                  viewType="runs"
+                  data={this.props.data}
+                  pageQuery={{
+                    entity: this.props.match.params.entity,
+                    project: this.props.match.params.model,
+                    sort: this.props.sort,
+                    filters: this.props.runFilters,
+                    selections: this.props.runSelections,
+                  }}
+                  updateViews={views =>
+                    this.props.updateModel({
+                      entityName: this.props.match.params.entity,
+                      name: this.props.match.params.model,
+                      id: this.props.projectID,
+                      views: views,
+                    })
+                  }
+                />
+              )}
+            </Grid.Column>
+          }
           <Grid.Column width={16} style={{zIndex: 2}}>
             <Popup
               trigger={
-                <Button floated="right" icon="columns" content="Columns" />
+                <Button
+                  disabled={this.props.loading}
+                  floated="right"
+                  icon="configure"
+                  content="Edit Table"
+                />
               }
               content={
-                <RunColumnsSelector columnNames={this.props.columnNames} />
+                <RunFeedConfig
+                  config={this.props.tableConfig}
+                  update={this.props.updateRunsTable}
+                  isModified={this.props.isModified}
+                  saveChanges={() =>
+                    this.props.updateModel({
+                      entityName: this.props.match.params.entity,
+                      name: this.props.match.params.model,
+                      id: this.props.projectID,
+                      views: JSON.stringify(this.props.viewState),
+                    })
+                  }
+                  query={{
+                    entity: this.props.match.params.entity,
+                    project: this.props.match.params.model,
+                    filters: {},
+                    page: {
+                      size: 1,
+                    },
+                  }}
+                />
               }
               on="click"
               position="bottom left"
             />
+            {!this.props.haveViews && (
+              <Button
+                floated="right"
+                content="Add Charts"
+                disabled={this.props.loading}
+                icon="area chart"
+                onClick={() => this.props.addView('runs', 'Charts', [])}
+              />
+            )}
+            <Button
+              floated="right"
+              disabled={this.props.counts.selected === 0}
+              onClick={e => {
+                // TODO(adrian): this should probably just be a separate component
+                e.preventDefault();
+
+                this.setState({
+                  showConfirm: true,
+                  confirmText:
+                    'Are you sure you would like to hide these runs? You can reverse this later by removing the "hidden" label.',
+                  confirmButton: `Hide ${this.props.counts.selected} run(s)`,
+                  handleConfirm: e => {
+                    e.preventDefault();
+                    this.props.modifyRuns({
+                      filters: JSON.stringify(
+                        Filter.toMongo(
+                          Filter.And([
+                            this.props.runFilters,
+                            this.props.runSelections,
+                          ])
+                        )
+                      ),
+                      entityName: this.props.match.params.entity,
+                      projectName: this.props.match.params.model,
+                      addTags: ['hidden'],
+                    });
+                    this.setState({
+                      showConfirm: false,
+                      handleConfirm: null,
+                      handleCancel: null,
+                    });
+                  },
+                  handleCancel: e => {
+                    e.preventDefault();
+                    this.setState({
+                      showConfirm: false,
+                      handleConfirm: null,
+                      handleCancel: null,
+                    });
+                  },
+                });
+              }}>
+              <Icon name="hide" />
+              Hide {this.props.counts.selected} run(s)
+            </Button>
+            <Dropdown
+              icon={null}
+              trigger={
+                <Button>
+                  <Icon
+                    name={
+                      this.props.counts.selected === 0
+                        ? 'square outline'
+                        : this.props.counts.selectedRuns ===
+                          this.props.counts.filtered
+                          ? 'checkmark box'
+                          : 'minus square outline'
+                    }
+                  />
+                  Select
+                </Button>
+              }
+              onClick={(e, {value}) => console.log('dropdown click', value)}>
+              <Dropdown.Menu>
+                <Dropdown.Item
+                  onClick={() =>
+                    this.props.setFilters('select', Selection.all())
+                  }>
+                  <Icon
+                    style={{marginRight: 4}}
+                    color="grey"
+                    name="checkmark box"
+                  />{' '}
+                  All
+                </Dropdown.Item>
+                <Dropdown.Item
+                  onClick={() =>
+                    this.props.setFilters('select', Selection.none())
+                  }>
+                  <Icon
+                    style={{marginRight: 4}}
+                    color="grey"
+                    name="square outline"
+                  />{' '}
+                  None
+                </Dropdown.Item>
+              </Dropdown.Menu>
+            </Dropdown>
+            {/* <p style={{float: 'right'}}>
+              Select
+              <a>all</a>
+              <a>none</a>
+            </p> */}
           </Grid.Column>
         </Grid>
         <RunFeed
-          admin={this.props.user && this.props.user.admin}
+          match={this.props.match}
           loading={this.props.loading}
-          runs={this.filteredRuns}
-          project={this.props.model}
+          project={this.props.project}
           onSort={this.onSort}
-          showFailed={this.state.showFailed}
-          selectable={true}
-          selectedRuns={this.props.selectedRuns}
-          columnNames={this.props.columnNames}
-          limit={this.props.limit}
+          config={this.props.tableConfig}
+          query={{
+            entity: this.props.match.params.entity,
+            project: this.props.match.params.model,
+            filters: this.props.runFilters,
+            page: {
+              // num: state.runs.pages[id] ? state.runs.pages[id].current : 0,
+              size: 10,
+            },
+            sort: this.props.sort,
+            disabled: !this.filtersReady,
+            grouping: this.props.tableConfig.grouping,
+            level: 'group',
+          }}
         />
-      </Container>
+      </div>
     );
   }
-}
-
-function parseBuckets(buckets) {
-  if (!buckets) {
-    return [];
-  }
-  return buckets.edges.map(edge => {
-    {
-      let node = {...edge.node};
-      node.config = node.config ? JSONparseNaN(node.config) : {};
-      node.config = flatten(_.mapValues(node.config, confObj => confObj.value));
-      node.summary = flatten(node.summaryMetrics)
-        ? JSONparseNaN(node.summaryMetrics)
-        : {};
-      delete node.summaryMetrics;
-      return node;
-    }
-  });
-}
-
-function getColumns(runs) {
-  let configColumns = _.uniq(
-    _.flatMap(runs, run => _.keys(run.config)).sort(),
-  ).map(col => 'config:' + col);
-  let summaryColumns = _.uniq(
-    _.flatMap(runs, run => _.keys(run.summary)).sort(),
-  ).map(col => 'summary:' + col);
-  let sweepColumns =
-    runs && runs.findIndex(r => r.sweep) > -1 ? ['Sweep', 'Stop'] : [];
-  return ['Description'].concat(
-    sweepColumns,
-    ['Ran', 'Runtime', 'Config'],
-    configColumns,
-    ['Summary'],
-    summaryColumns,
-  );
-}
-
-function setupKeySuggestions(runs) {
-  if (runs.length === 0) {
-    return [];
-  }
-
-  let getSectionSuggestions = section => {
-    let suggestions = _.uniq(_.flatMap(runs, run => _.keys(run[section])));
-    suggestions.sort();
-    return suggestions;
-  };
-  let runSuggestions = ['state', 'id'];
-  let keySuggestions = [
-    {
-      title: 'run',
-      suggestions: runSuggestions.map(suggestion => ({
-        section: 'run',
-        value: suggestion,
-      })),
-    },
-    {
-      title: 'sweep',
-      suggestions: [{section: 'sweep', value: 'name'}],
-    },
-    {
-      title: 'config',
-      suggestions: getSectionSuggestions('config').map(suggestion => ({
-        section: 'config',
-        value: suggestion,
-      })),
-    },
-    {
-      title: 'summary',
-      suggestions: getSectionSuggestions('summary').map(suggestion => ({
-        section: 'summary',
-        value: suggestion,
-      })),
-    },
-  ];
-  return keySuggestions;
-}
-
-function withData() {
-  // This is a function so we can keep track of some state variables, and only change child props
-  // when necessary for performance.
-  let prevRuns = null;
-  let runs = [];
-  let columnNames = [];
-  let keySuggestions = [];
-  return graphql(RUNS_QUERY, {
-    options: ({match: {params, path}, jobId, user, embedded}) => {
-      const defaults = {
-        variables: {
-          jobKey: jobId,
-          entityName: params.entity,
-          name: params.model,
-          order: 'timeline',
-        },
-      };
-      if (BOARD) defaults.pollInterval = 5000;
-      return defaults;
-    },
-    props: ({data: {loading, model, viewer, refetch}, errors}) => {
-      //TODO: renaming extravaganza
-      if (model && prevRuns !== model.buckets) {
-        runs = parseBuckets(model.buckets);
-        columnNames = getColumns(runs);
-        keySuggestions = setupKeySuggestions(runs);
-        prevRuns = model.buckets;
-      }
-      let views = null;
-      if (model && model.views) {
-        views = JSON.parse(model.views);
-      }
-      //TODO: For some reason the first poll causes loading to be true
-      if (model && model.buckets && loading) loading = false;
-      return {
-        loading,
-        refetch,
-        projectID: model && model.id,
-        buckets: model && model.buckets,
-        views,
-        runs,
-        columnNames,
-        keySuggestions,
-        viewer,
-      };
-    },
-  });
 }
 
 const withMutations = compose(
@@ -490,6 +500,15 @@ const withMutations = compose(
         }),
     }),
   }),
+  graphql(MODIFY_RUNS, {
+    props: ({mutate}) => ({
+      modifyRuns: variables => {
+        mutate({
+          variables: {...variables},
+        });
+      },
+    }),
+  })
 );
 
 function mapStateToProps(state, ownProps) {
@@ -503,6 +522,14 @@ function mapStateToProps(state, ownProps) {
     reduxServerViews: state.views.server,
     reduxBrowserViews: state.views.browser,
     activeView: state.views.other.runs.activeView,
+    haveViews:
+      !_.isEqual(state.views.browser, state.views.server) ||
+      state.views.browser.runs.tabs.length > 0,
+    tableConfig: state.views.browser.runs.runsTable
+      ? state.views.browser.runs.runsTable.config
+      : {},
+    viewState: state.views.browser,
+    isModified: !_.isEqual(state.views.server.runs, state.views.browser.runs),
   };
 }
 
@@ -511,11 +538,49 @@ export {Runs};
 
 const mapDispatchToProps = (dispatch, ownProps) => {
   return bindActionCreators(
-    {setColumns, clearFilters, addFilter, setServerViews, setActiveView},
-    dispatch,
+    {
+      setColumns,
+      setFilters,
+      setServerViews,
+      setBrowserViews,
+      setActiveView,
+      resetViews,
+      addView,
+      updateRunsTable,
+    },
+    dispatch
   );
 };
 
+const withData = graphql(PROJECT_QUERY, {
+  options: ({match, runFilters, runSelections}) => {
+    return {
+      variables: {
+        entityName: match.params.entity,
+        name: match.params.model,
+        filters: JSON.stringify(Filter.toMongo(runFilters)),
+        selections: JSON.stringify(
+          Filter.toMongo(Filter.And([runFilters, runSelections]))
+        ),
+      },
+    };
+  },
+  props: ({data: {loading, project, viewer, fetchMore}, errors}) => {
+    //TODO: For some reason the first poll causes loading to be true
+    // if (project && projects.runs && loading) loading = false;
+    return {
+      loading,
+      views: project && project.views && JSON.parse(project.views),
+      projectID: project && project.id,
+      counts: {
+        runs: project && project.runCount,
+        filtered: project && project.filteredCount,
+        selected: project && project.selectedCount,
+      },
+    };
+  },
+});
+
 export default connect(mapStateToProps, mapDispatchToProps)(
-  withMutations(withData()(withHistoryLoader(withApollo(Runs)))),
+  withMutations(withData(Runs))
 );

@@ -8,9 +8,11 @@ from six.moves import queue
 import requests
 import shlex
 import subprocess
+import sys
 import threading
 import time
 
+import wandb
 from wandb import io_wrap
 
 logger = logging.getLogger(__name__)
@@ -111,7 +113,7 @@ def find_runner(program):
         if first_line.startswith('#!'):
             return shlex.split(first_line[2:])
         if program.endswith('.py'):
-            return ['python']
+            return [sys.executable]
     return None
 
 
@@ -119,8 +121,11 @@ def downsample(values, target_length):
     """Downsamples 1d values to target_length, including start and end.
 
     Algorithm just rounds index down.
+
+    Values can be any sequence, including a generator.
     """
     assert target_length > 1
+    values = list(values)
     if len(values) < target_length:
         return values
     ratio = float(len(values) - 1) / (target_length - 1)
@@ -139,11 +144,7 @@ def md5_file(path):
 
 
 def get_log_file_path():
-    parent_handlers = logger.parent.handlers
-    if parent_handlers and "baseFilename" in dir(parent_handlers[0]):
-        return os.path.relpath(parent_handlers[0].baseFilename, os.getcwd())
-    else:
-        return '<unknown>'
+    return wandb.log_fname
 
 
 def read_many_from_queue(q, max_items, queue_timeout):

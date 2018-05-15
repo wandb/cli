@@ -1,6 +1,7 @@
 from gql import Client, gql
 from gql.client import RetryError
 from gql.transport.requests import RequestsHTTPTransport
+import datetime
 import os
 import requests
 import ast
@@ -11,11 +12,6 @@ import os
 import json
 import yaml
 import re
-import wandb
-from wandb import __version__, __stage_dir__, Error
-from wandb.git_repo import GitRepo
-from wandb import util
-from .config import Config
 import base64
 import binascii
 import click
@@ -33,6 +29,13 @@ import time
 import sys
 
 from six import b
+
+import wandb
+from wandb import __version__, wandb_dir, Error
+from wandb import env
+from wandb.git_repo import GitRepo
+from wandb import retry
+from wandb import util
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +61,9 @@ class Progress(object):
 
 class CommError(Error):
     """Error communicating with W&B"""
-    pass
+    def __init__(self, msg, exc=None):
+        super(CommError, self).__init__(msg)
+        self.exc = exc
 
 
 class UsageError(Error):
@@ -74,7 +79,7 @@ def normalize_exceptions(func):
         try:
             return func(*args, **kwargs)
         except requests.HTTPError as err:
-            raise CommError(err.response)
+            raise CommError(err.response, err)
         except RetryError as err:
             if "response" in dir(err.last_exception) and err.last_exception.response is not None:
                 try:
@@ -84,7 +89,7 @@ def normalize_exceptions(func):
                     message = err.last_exception.response.text
             else:
                 message = err.last_exception
-            raise CommError(message)
+            raise CommError(message, err.last_exception)
         except Exception as err:
             # gql raises server errors with dict's as strings...
             if len(err.args) > 0:
@@ -98,7 +103,7 @@ def normalize_exceptions(func):
             if os.getenv("WANDB_DEBUG") == "true":
                 raise
             else:
-                raise CommError(message)
+                raise CommError(message, err)
     return wrapper
 
 
@@ -119,7 +124,7 @@ class Api(object):
 
     HTTP_TIMEOUT = 10
 
-    def __init__(self, default_settings=None, load_settings=True):
+    def __init__(self, default_settings=None, load_settings=True, retry_timedelta=datetime.timedelta(days=1)):
         self.default_settings = {
             'section': "default",
             'entity': "models",
@@ -128,6 +133,7 @@ class Api(object):
             'git_tag': False,
             'base_url': "https://api.wandb.ai"
         }
+        self.retry_timedelta = retry_timedelta
         self.default_settings.update(default_settings or {})
         self._settings = None
         self.retries = 3
@@ -137,24 +143,26 @@ class Api(object):
             potential_settings_paths = [
                 os.path.expanduser('~/.wandb/settings')
             ]
-            if __stage_dir__ is not None:
-                potential_settings_paths.append(
-                    os.path.join(os.getcwd(), __stage_dir__, 'settings'))
+            potential_settings_paths.append(
+                os.path.join(wandb_dir(), 'settings'))
             files = self._settings_parser.read(potential_settings_paths)
             self.settings_file = files[0] if len(files) > 0 else "Not found"
         else:
             self.settings_file = "Not found"
         self.git = GitRepo(remote=self.settings("git_remote"))
-        self.client = Client(
-            retries=self.retries,
+        client = Client(
             transport=RequestsHTTPTransport(
                 headers={'User-Agent': self.user_agent},
                 use_json=True,
+                # this timeout won't apply when the DNS lookup fails. in that case, it will be 60s
+                # https://bugs.python.org/issue22889
                 timeout=self.HTTP_TIMEOUT,
                 auth=("api", self.api_key),
                 url='%s/graphql' % self.settings('base_url')
             )
         )
+        self.gql = retry.Retry(client.execute, retry_timedelta=retry_timedelta,
+                               retryable_exceptions=(RetryError, requests.RequestException))
         self._current_run_id = None
         self._file_stream_api = None
 
@@ -172,7 +180,7 @@ class Api(object):
         Args:
             out_dir (str): Directory to write the patch files.
         """
-        if not self.git.repo:
+        if not self.git.enabled:
             return False
 
         try:
@@ -205,15 +213,20 @@ class Api(object):
         except subprocess.CalledProcessError:
             logger.error('Error generating diff')
 
+    def repo_remote_url(self):
+        # TODO: better failure handling
+        if self.git.enabled:
+            root = self.git.root
+            remote_url = self.git.remote_url
+        else:
+            host = socket.gethostname()
+            root = os.path.abspath(os.getcwd())
+            remote_url = 'file://%s%s' % (host, root)
+
+        return remote_url
+
     def set_current_run_id(self, run_id):
         self._current_run_id = run_id
-
-    def ensure_configured(self):
-        # The WANDB_DEBUG check ensures tests still work.
-        if not os.getenv('WANDB_DEBUG') and not self.settings("project"):
-            wandb.termlog('wandb.init() called but system not configured.\n'
-                          'Run "wandb init" or set environment variables to get started')
-            sys.exit(1)
 
     @property
     def current_run_id(self):
@@ -273,12 +286,13 @@ class Api(object):
                             section, option)
             except configparser.InterpolationSyntaxError:
                 print("WARNING: Unable to parse settings file")
-            self._settings["project"] = os.environ.get("WANDB_PROJECT",
-                                                       self._settings.get("project"))
-            self._settings["entity"] = os.environ.get("WANDB_ENTITY",
-                                                      self._settings.get("entity"))
-            self._settings["base_url"] = os.environ.get("WANDB_BASE_URL",
-                                                        self._settings.get("base_url"))
+            self._settings["project"] = env.get_project(
+                self._settings.get("project"))
+            self._settings["entity"] = env.get_entity(
+                self._settings.get("entity"))
+            self._settings["base_url"] = env.get_base_url(
+                self._settings.get("base_url"))
+
         return self._settings if key is None else self._settings[key]
 
     def parse_slug(self, slug, project=None, run=None):
@@ -290,7 +304,7 @@ class Api(object):
             project = project or self.settings().get("project")
             if project is None:
                 raise CommError("No default project configured.")
-            run = run or slug or os.environ.get("WANDB_RUN")
+            run = run or slug or env.get_run()
             if run is None:
                 run = "latest"
         return (project, run)
@@ -312,7 +326,7 @@ class Api(object):
             }
         }
         ''')
-        res = self.client.execute(query)
+        res = self.gql(query)
         return res.get('viewer', {})
 
     @normalize_exceptions
@@ -338,7 +352,7 @@ class Api(object):
             }
         }
         ''')
-        return self._flatten_edges(self.client.execute(query, variable_values={
+        return self._flatten_edges(self.gql(query, variable_values={
             'entity': entity or self.settings('entity')})['models'])
 
     @normalize_exceptions
@@ -367,7 +381,7 @@ class Api(object):
             }
         }
         ''')
-        return self._flatten_edges(self.client.execute(query, variable_values={
+        return self._flatten_edges(self.gql(query, variable_values={
             'entity': entity or self.settings('entity'),
             'model': project or self.settings('project')})['model']['buckets'])
 
@@ -411,7 +425,7 @@ class Api(object):
         cwd = "."
         if self.git.enabled:
             cwd = cwd + os.getcwd().replace(self.git.repo.working_dir, "")
-        return self.client.execute(query, variable_values={
+        return self.gql(query, variable_values={
             'entity': entity or self.settings('entity'),
             'model': project or self.settings('project'),
             'command': command,
@@ -441,7 +455,7 @@ class Api(object):
         }
         ''')
 
-        response = self.client.execute(query, variable_values={
+        response = self.gql(query, variable_values={
             'name': project, 'run': run, 'entity': entity
         })
         run = response['model']['bucket']
@@ -449,6 +463,42 @@ class Api(object):
         patch = run['patch']
         config = json.loads(run['config'] or '{}')
         return (commit, config, patch)
+
+    @normalize_exceptions
+    def run_resume_status(self, entity, project, name):
+        """Check if a run exists and get resume information.
+
+        Args:
+            project (str): The project to download, (can include bucket)
+            run (str, optional): The run to download
+            entity (str, optional): The entity to scope this project to.
+        """
+        query = gql('''
+        query Model($project: String!, $entity: String!, $name: String!) {
+            model(name: $project, entityName: $entity) {
+                bucket(name: $name) {
+                    id
+                    name
+                    logLineCount
+                    historyLineCount
+                    eventsLineCount
+                    historyTail
+                    eventsTail
+                }
+            }
+        }
+        ''')
+
+        try:
+            response = self.gql(query, variable_values={
+                'entity': entity, 'project': project, 'name': name,
+            })
+        except Exception as e:
+            if '404' in str(e):
+                return None
+            raise
+        run = response['model']['bucket']
+        return run
 
     def format_project(self, project):
         return re.sub(r'\W+', '-', project.lower()).strip("-_")
@@ -472,16 +522,16 @@ class Api(object):
             }
         }
         ''')
-        response = self.client.execute(mutation, variable_values={
+        response = self.gql(mutation, variable_values={
             'name': self.format_project(project), 'entity': entity or self.settings('entity'),
             'description': description, 'repo': self.git.remote_url, 'id': id})
         return response['upsertModel']['model']
 
     @normalize_exceptions
     def upsert_run(self, id=None, name=None, project=None, host=None,
-                   config=None, description=None, entity=None,
+                   config=None, description=None, entity=None, state=None,
                    repo=None, job_type=None, program_path=None, commit=None,
-                   sweep_name=None):
+                   sweep_name=None, summary_metrics=None, num_retries=None):
         """Update a run
 
         Args:
@@ -492,9 +542,11 @@ class Api(object):
             description (str, optional): A description of this project
             entity (str, optional): The entity to scope this project to.
             repo (str, optional): Url of the program's repository.
+            state (str, optional): State of the program.
             job_type (str, optional): Type of job, e.g 'train'.
             program_path (str, optional): Path to the program.
             commit (str, optional): The Git SHA to associate the run with
+            summary_metrics (str, optional): The JSON summary metrics
         """
         mutation = gql('''
         mutation UpsertBucket(
@@ -509,7 +561,9 @@ class Api(object):
             $program: String,
             $repo: String,
             $jobType: String,
-            $sweep: String
+            $state: String,
+            $sweep: String,
+            $summaryMetrics: JSONString,
         ) {
             upsertBucket(input: {
                 id: $id, name: $name,
@@ -523,7 +577,9 @@ class Api(object):
                 jobProgram: $program,
                 jobRepo: $repo,
                 jobType: $jobType,
-                sweep: $sweep
+                state: $state,
+                sweep: $sweep,
+                summaryMetrics: $summaryMetrics,
             }) {
                 bucket {
                     id
@@ -538,12 +594,20 @@ class Api(object):
             config = json.dumps(config)
         if not description:
             description = None
-        commit = commit or self.git.last_commit
-        response = self.client.execute(mutation, variable_values={
+
+        kwargs = {}
+        if num_retries is not None:
+            kwargs['num_retries'] = num_retries
+
+        variable_values = {
             'id': id, 'entity': entity or self.settings('entity'), 'name': name, 'project': project,
             'description': description, 'config': config, 'commit': commit,
-            'host': host, 'debug': os.getenv('DEBUG'), 'repo': repo, 'program': program_path, 'jobType': job_type,
-            'sweep': sweep_name})
+            'host': host, 'debug': env.get_debug(), 'repo': repo, 'program': program_path, 'jobType': job_type,
+            'state': state, 'sweep': sweep_name, 'summaryMetrics': summary_metrics
+        }
+
+        response = self.gql(mutation, variable_values=variable_values, **kwargs)
+
         return response['upsertBucket']['bucket']
 
     @normalize_exceptions
@@ -583,7 +647,7 @@ class Api(object):
             }
         }
         ''')
-        query_result = self.client.execute(query, variable_values={
+        query_result = self.gql(query, variable_values={
             'name': project, 'run': run or self.settings('run'),
             'entity': entity or self.settings('entity'),
             'description': description,
@@ -629,7 +693,7 @@ class Api(object):
             }
         }
         ''')
-        query_result = self.client.execute(query, variable_values={
+        query_result = self.gql(query, variable_values={
             'name': project, 'run': run or self.settings('run'),
             'entity': entity or self.settings('entity')})
         files = self._flatten_edges(query_result['model']['bucket']['files'])
@@ -660,7 +724,7 @@ class Api(object):
             A tuple of the file's local path and the streaming response. The streaming response is None if the file already existed and was up to date.
         """
         fileName = metadata['name']
-        path = os.path.join(__stage_dir__, fileName)
+        path = os.path.join(wandb_dir(), fileName)
         if self.file_current(fileName, metadata['md5']):
             return path, None
 
@@ -746,12 +810,12 @@ class Api(object):
         ''')
         if project_name is None:
             project_name = self.settings('project')
-        response = self.client.execute(mutation, variable_values={
-                                       'host': host,
-                                       'entityName': self.settings("entity"),
-                                       'modelName': project_name,
-                                       'persistent': persistent,
-                                       'sweep': sweep_id})
+        response = self.gql(mutation, variable_values={
+            'host': host,
+            'entityName': self.settings("entity"),
+            'modelName': project_name,
+            'persistent': persistent,
+            'sweep': sweep_id})
         return response['createAgent']['agent']
 
     def agent_heartbeat(self, agent_id, metrics, run_states):
@@ -784,10 +848,10 @@ class Api(object):
         }
         ''')
         try:
-            response = self.client.execute(mutation, variable_values={
-                                           'id': agent_id,
-                                           'metrics': json.dumps(metrics),
-                                           'runState': json.dumps(run_states)})
+            response = self.gql(mutation, variable_values={
+                'id': agent_id,
+                'metrics': json.dumps(metrics),
+                'runState': json.dumps(run_states)})
         except Exception as e:
             # GQL raises exceptions with stringified python dictionaries :/
             message = ast.literal_eval(e.args[0])["message"]
@@ -822,11 +886,11 @@ class Api(object):
             }
         }
         ''')
-        response = self.client.execute(mutation, variable_values={
-                                       'config': yaml.dump(config),
-                                       'description': config.get("description"),
-                                       'entityName': self.settings("entity"),
-                                       'modelName': self.settings("project")})
+        response = self.gql(mutation, variable_values={
+            'config': yaml.dump(config),
+            'description': config.get("description"),
+            'entityName': self.settings("entity"),
+            'modelName': self.settings("project")})
         return response['upsertSweep']['sweep']['name']
 
     def file_current(self, fname, md5):
@@ -882,8 +946,9 @@ class Api(object):
         responses = []
         for file_name, file_info in result.items():
             try:
-                open_file = files[file_name] if isinstance(
-                    files, dict) else open(file_name, "rb")
+                normal_name = os.path.join(*file_name.split("/"))
+                open_file = files[normal_name] if isinstance(
+                    files, dict) else open(normal_name, "rb")
             except IOError:
                 print("%s does not exist" % file_name)
                 continue
@@ -921,9 +986,9 @@ class Api(object):
             if not force and self.git.dirty:
                 raise CommError(
                     "You have un-committed changes. Use the force flag or commit your changes.")
-            elif self.git.dirty and os.path.exists(__stage_dir__):
+            elif self.git.dirty and os.path.exists(wandb_dir()):
                 self.git.repo.git.execute(['git', 'diff'], output_stream=open(
-                    os.path.join(__stage_dir__, 'diff.patch'), 'wb'))
+                    os.path.join(wandb_dir(), 'diff.patch'), 'wb'))
             self.git.tag(name, description)
             result = self.git.push(name)
             if(result is None or len(result) is None):
@@ -946,8 +1011,8 @@ Chunk = collections.namedtuple('Chunk', ('filename', 'data'))
 
 
 class DefaultFilePolicy(object):
-    def __init__(self):
-        self._chunk_id = 0
+    def __init__(self, start_chunk_id=0):
+        self._chunk_id = start_chunk_id
 
     def process_chunks(self, chunks):
         chunk_id = self._chunk_id
@@ -959,8 +1024,8 @@ class DefaultFilePolicy(object):
 
 
 class CRDedupeFilePolicy(object):
-    def __init__(self):
-        self._chunk_id = 0
+    def __init__(self, start_chunk_id=0):
+        self._chunk_id = start_chunk_id
 
     def process_chunks(self, chunks):
         content = []
@@ -1006,8 +1071,7 @@ class FileStreamApi(object):
     Finish = collections.namedtuple('Finish', ('exitcode'))
 
     HTTP_TIMEOUT = 10
-    RATE_LIMIT_SECONDS = 1
-    HEARTBEAT_INTERVAL_SECONDS = 15
+    HEARTBEAT_INTERVAL_SECONDS = 30
     MAX_ITEMS_PER_PUSH = 10000
 
     def __init__(self, api_key, user_agent, base_url, entity, project, run_id):
@@ -1033,9 +1097,18 @@ class FileStreamApi(object):
     def set_file_policy(self, filename, file_policy):
         self._file_policies[filename] = file_policy
 
+    def rate_limit_seconds(self):
+        run_time = time.time() - wandb.START_TIME
+        if run_time < 30:
+            return 2
+        elif run_time < 300:
+            return 10
+        else:
+            return self.HEARTBEAT_INTERVAL_SECONDS
+
     def _read_queue(self):
         # called from the push thread (_thread_body), this does an initial read
-        # that'll block for up to RATE_LIMIT_SECONDS. Then it tries to read
+        # that'll block for up to rate_limit_seconds. Then it tries to read
         # as much out of the queue as it can. We do this because the http post
         # to the server happens within _thread_body, and can take longer than
         # our rate limit. So next time we get a chance to read the queue we want
@@ -1044,7 +1117,7 @@ class FileStreamApi(object):
         # If we have more than MAX_ITEMS_PER_PUSH in the queue then the push thread
         # will get behind and data will buffer up in the queue.
         return util.read_many_from_queue(
-            self._queue, self.MAX_ITEMS_PER_PUSH, self.RATE_LIMIT_SECONDS)
+            self._queue, self.MAX_ITEMS_PER_PUSH, self.rate_limit_seconds())
 
     def _thread_body(self):
         posted_data_time = time.time()
@@ -1062,7 +1135,7 @@ class FileStreamApi(object):
 
             cur_time = time.time()
 
-            if ready_chunks and cur_time - posted_data_time > self.RATE_LIMIT_SECONDS:
+            if ready_chunks and cur_time - posted_data_time > self.rate_limit_seconds():
                 posted_data_time = cur_time
                 posted_anything_time = cur_time
                 self._send(ready_chunks)
@@ -1082,6 +1155,7 @@ class FileStreamApi(object):
         files = {}
         # Groupby needs group keys to be consecutive, so sort first.
         chunks.sort(key=lambda c: c.filename)
+        #print('fsapi', chunks)
         for filename, file_chunks in itertools.groupby(chunks, lambda c: c.filename):
             file_chunks = list(file_chunks)  # groupby returns iterator
             if filename not in self._file_policies:

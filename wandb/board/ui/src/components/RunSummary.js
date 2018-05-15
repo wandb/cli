@@ -1,21 +1,25 @@
 import React, {Component} from 'react';
 import {
   Button,
-  Divider,
+  Label,
   Grid,
   Header,
   Modal,
   Message,
-  Popup,
   Segment,
 } from 'semantic-ui-react';
 import {NavLink} from 'react-router-dom';
 import Markdown from './Markdown';
+import Tags from './Tags';
 import TimeAgo from 'react-timeago';
+
+/**
+ *  This component makes the summary on top of a runs page.
+ */
 
 class RunSummary extends Component {
   color() {
-    switch (this.props.bucket.state) {
+    switch (this.props.run.state) {
       case 'running':
         return 'blue';
       case 'finished':
@@ -35,8 +39,8 @@ class RunSummary extends Component {
   }
 
   render() {
-    const {model, bucket} = this.props;
-    const parts = (bucket.description || 'No run message').trim().split('\n'),
+    const {project, run} = this.props;
+    const parts = (run.description || 'No run message').trim().split('\n'),
       header = parts.shift(),
       body = parts.join('\n');
     return (
@@ -53,18 +57,18 @@ class RunSummary extends Component {
                 size="tiny"
                 floated="right">
                 <NavLink
-                  to={`/${model.entityName}/${model.name}/runs/${
-                    bucket.name
+                  to={`/${project.entityName}/${project.name}/runs/${
+                    run.name
                   }/edit`}>
                   <Button icon="edit" basic />
                 </NavLink>
-                {bucket.sweep &&
-                  bucket.state == 'running' && (
+                {run.sweep &&
+                  run.state === 'running' && (
                     <Button
                       icon="stop circle"
                       onClick={() => {
                         if (window.confirm('Should we stop this run?')) {
-                          this.props.onStop(bucket.id);
+                          this.props.onStop(run.id);
                         }
                       }}
                       negative
@@ -79,43 +83,61 @@ class RunSummary extends Component {
         <Segment attached="bottom">
           <Grid>
             <Grid.Row>
-              <Grid.Column width={10}>
-                <strong>
-                  ran {bucket.user && 'by ' + bucket.user.username}{' '}
-                  {bucket.heartbeatAt && (
-                    <span>
-                      for{' '}
+              <Grid.Column width={8}>
+                {this.props.run.state == 'running' ? (
+                  <strong>running </strong>
+                ) : (
+                  <strong>ran </strong>
+                )}
+                {run.user && this.props.run.state == 'running' ? (
+                  <span>for </span>
+                ) : (
+                  <span>by </span>
+                )}
+                {run.user && <strong>{run.user.username}</strong>}{' '}
+                {run.heartbeatAt && (
+                  <span>
+                    for{' '}
+                    <strong>
                       <TimeAgo
-                        date={bucket.createdAt + 'Z'}
+                        date={run.createdAt + 'Z'}
                         now={() => {
-                          return Date.parse(bucket.heartbeatAt + 'Z');
+                          return Date.parse(run.heartbeatAt + 'Z');
                         }}
                         formatter={(v, u, s, d, f) => f().replace(s, '')}
                         live={false}
                       />
+                    </strong>
+                  </span>
+                )}
+                {run.host && (
+                  <span>
+                    on <strong>{run.host}</strong>
+                  </span>
+                )}
+              </Grid.Column>
+              <Grid.Column width={8} textAlign="right">
+                {run.tags &&
+                  run.tags.length > 0 && (
+                    <span>
+                      tags <Tags tags={run.tags} />{' '}
                     </span>
                   )}
-                </strong>
-                {bucket.host && ' on ' + bucket.host}
-              </Grid.Column>
-              <Grid.Column width={6} textAlign="right">
                 run{' '}
                 <NavLink
-                  to={`/${model.entityName}/${model.name}/runs/${bucket.name}`}>
-                  {bucket.name}
+                  to={`/${project.entityName}/${project.name}/runs/${
+                    run.name
+                  }`}>
+                  {run.name}
                 </NavLink>
-                {bucket.commit && (
+                {run.commit && ' commit '}
+                {run.commit && (
                   <Modal
                     on="click"
                     trigger={
-                      <span className="commit">
-                        &nbsp;&nbsp;&nbsp;&nbsp; commit{' '}
-                        <a
-                          onClick={e => e.preventDefault()}
-                          href={bucket.github}>
-                          {bucket.commit}
-                        </a>
-                      </span>
+                      <a onClick={e => e.preventDefault()} href={run.github}>
+                        {run.commit.slice(0, 6)}
+                      </a>
                     }>
                     <Modal.Header>
                       <h1>Git commit</h1>
@@ -128,7 +150,7 @@ class RunSummary extends Component {
 
                       <p>
                         If you pushed the commit to github, you can find your
-                        commit at <a href={bucket.github}>this github link</a>.
+                        commit at <a href={run.github}>this github link</a>.
                       </p>
 
                       <p>

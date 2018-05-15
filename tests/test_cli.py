@@ -1,3 +1,4 @@
+import datetime
 import pytest
 import os
 import traceback
@@ -5,8 +6,7 @@ import click
 from wandb import __version__
 from wandb import api as wandb_api
 from wandb import cli
-from wandb import git_repo
-from .utils import runner
+from .utils import runner, git_repo
 from .api_mocks import *
 import netrc
 import signal
@@ -18,6 +18,7 @@ import yaml
 import git
 import webbrowser
 import wandb
+import threading
 
 DUMMY_API_KEY = '1824812581259009ca9981580f8f8a9012409eee'
 
@@ -29,6 +30,15 @@ except ImportError:
     from imp import reload
 except ImportError:
     pass
+
+
+def sigint(delay=0.1):
+    """Send a SIGINT to this process, used to stop the local webserver in tests"""
+    thread = threading.Thread(target=lambda: (
+        time.sleep(delay),
+        os.kill(os.getpid(), signal.SIGINT)
+    ))
+    thread.start()
 
 
 @pytest.fixture
@@ -50,12 +60,12 @@ def local_netrc(monkeypatch):
     monkeypatch.setattr(os.path, "expanduser", expand)
 
 
-def git_repo():
-    r = git.Repo.init(".")
-    open("README", "wb").close()
-    r.index.add(["README"])
-    r.index.commit("Initial commit")
-    return git_repo.GitRepo(lazy=False)
+def setup_module(module):
+    os.environ["WANDB_TEST"] = "true"
+
+
+def teardown_module(module):
+    del os.environ["WANDB_TEST"]
 
 
 def test_help(runner):
@@ -135,86 +145,6 @@ def test_config_del(runner):
         assert "1 parameters changed" in result.output
 
 
-@pytest.mark.skip(reason='feature disabled')
-def test_push(runner, request_mocker, query_project, upload_url, upsert_run, monkeypatch):
-    query_project(request_mocker)
-    upload_url(request_mocker)
-    update_mock = upsert_run(request_mocker)
-    with runner.isolated_filesystem():
-        # So GitRepo is in this cwd
-        os.mkdir('wandb')
-        monkeypatch.setattr(cli, 'api', wandb_api.Api({'project': 'test'}))
-        with open("wandb/latest.yaml", "w") as f:
-            f.write(yaml.dump({'wandb_version': 1, 'test': {
-                    'value': 'success', 'desc': 'My life'}}))
-        with open('weights.h5', 'wb') as f:
-            f.write(os.urandom(5000))
-        result = runner.invoke(
-            cli.push, ['test/default', 'weights.h5', '-m', 'My description'])
-        print(result.output)
-        print(result.exception)
-        print(traceback.print_tb(result.exc_info[2]))
-        assert result.exit_code == 0
-        assert "Updating run: test/default" in result.output
-
-
-@pytest.mark.skip(reason='feature disabled')
-def test_push_no_run(runner):
-    with runner.isolated_filesystem():
-        with open('weights.h5', 'wb') as f:
-            f.write(os.urandom(5000))
-        result = runner.invoke(
-            cli.push, ['weights.h5', '-p', 'test', '-m', 'Something great'])
-        print(result.output)
-        print(result.exception)
-        print(traceback.print_tb(result.exc_info[2]))
-        assert result.exit_code == 2
-        assert "Run id is required if files are specified." in result.output
-
-
-@pytest.mark.skip(reason='feature disabled')
-def test_push_dirty_git(runner, monkeypatch):
-    with runner.isolated_filesystem():
-        os.mkdir('wandb')
-
-        # If the test was run from a directory containing .wandb, then __stage_dir__
-        # was '.wandb' when imported by api.py, reload to fix. UGH!
-        reload(wandb)
-        repo = git_repo()
-        open("foo.txt", "wb").close()
-        repo.repo.index.add(["foo.txt"])
-        monkeypatch.setattr(cli, 'api', wandb_api.Api({'project': 'test'}))
-        cli.api._settings['git_tag'] = True
-        result = runner.invoke(
-            cli.push, ["test", "foo.txt", "-p", "test", "-m", "Dirty"])
-        print(result.output)
-        print(result.exception)
-        print(traceback.print_tb(result.exc_info[2]))
-        assert result.exit_code == 1
-        assert "You have un-committed changes." in result.output
-
-
-@pytest.mark.skip(reason='feature disabled')
-def test_push_dirty_force_git(runner, request_mocker, query_project, upload_url, upsert_run, monkeypatch):
-    query_project(request_mocker)
-    upload_url(request_mocker)
-    update_mock = upsert_run(request_mocker)
-    with runner.isolated_filesystem():
-        # So GitRepo is in this cwd
-        monkeypatch.setattr(cli, 'api', wandb_api.Api({'project': 'test'}))
-        repo = git_repo()
-        with open('weights.h5', 'wb') as f:
-            f.write(os.urandom(100))
-        repo.repo.index.add(["weights.h5"])
-        result = runner.invoke(
-            cli.push, ["test", "weights.h5", "-f", "-p", "test", "-m", "Dirty"])
-        print(result.output)
-        print(result.exception)
-        print(traceback.print_tb(result.exc_info[2]))
-        assert result.exit_code == 0
-
-
-@pytest.mark.skip(reason='feature disabled')
 def test_pull(runner, request_mocker, query_project, download_url):
     query_project(request_mocker)
     download_url(request_mocker)
@@ -231,7 +161,6 @@ def test_pull(runner, request_mocker, query_project, download_url):
         assert "File weights.h5" in result.output
 
 
-@pytest.mark.skip(reason='feature disabled')
 def test_pull_custom_run(runner, request_mocker, query_project, download_url):
     query_project(request_mocker)
     download_url(request_mocker)
@@ -245,7 +174,6 @@ def test_pull_custom_run(runner, request_mocker, query_project, download_url):
         assert "Downloading: test/test" in result.output
 
 
-@pytest.mark.skip(reason='feature disabled')
 def test_pull_empty_run(runner, request_mocker, query_empty_project, download_url):
     query_empty_project(request_mocker)
     result = runner.invoke(cli.pull, ['test/test'])
@@ -295,28 +223,28 @@ def test_no_project_bad_command(runner):
     assert result.exit_code == 2
 
 
-@pytest.mark.skip('restore functionality broken for now, fixes coming...')
-def test_restore(runner, request_mocker, query_run, monkeypatch):
+def test_restore(runner, request_mocker, query_run, git_repo, monkeypatch):
+    # git_repo creates it's own isolated filesystem
     mock = query_run(request_mocker)
-    with runner.isolated_filesystem():
-        os.mkdir("wandb")
-        repo = git_repo()
-        with open("patch.txt", "w") as f:
-            f.write("test")
-        repo.repo.index.add(["patch.txt"])
-        repo.repo.commit()
-        monkeypatch.setattr(cli, 'api', wandb_api.Api({'project': 'test'}))
-        result = runner.invoke(cli.restore, ["test/abcdef"])
-        print(result.output)
-        print(traceback.print_tb(result.exc_info[2]))
-        assert result.exit_code == 0
-        assert "Created branch wandb/abcdef" in result.output
-        assert "Applied patch" in result.output
-        assert "Restored config variables" in result.output
+    with open("patch.txt", "w") as f:
+        f.write("test")
+    git_repo.repo.index.add(["patch.txt"])
+    git_repo.repo.commit()
+    monkeypatch.setattr(cli, 'api', wandb_api.Api({'project': 'test'}))
+    result = runner.invoke(cli.restore, ["test/abcdef"])
+    print(result.output)
+    print(traceback.print_tb(result.exc_info[2]))
+    assert result.exit_code == 0
+    assert "Created branch wandb/abcdef" in result.output
+    assert "Applied patch" in result.output
+    assert "Restored config variables" in result.output
 
 
 def test_projects_error(runner, request_mocker, query_projects):
     query_projects(request_mocker, status_code=400)
+    # Ugly, reach in to APIs request Retry object and tell it to only
+    # retry for 50us
+    cli.api.gql._retry_timedelta = datetime.timedelta(0, 0, 50)
     result = runner.invoke(cli.projects)
     print(result.exception)
     print(result.output)
@@ -325,9 +253,39 @@ def test_projects_error(runner, request_mocker, query_projects):
     assert "Error" in result.output
 
 
-def test_init_new_login(runner, empty_netrc, local_netrc, request_mocker, query_projects, query_viewer):
+def test_login_key_arg(runner, empty_netrc, local_netrc):
+    with runner.isolated_filesystem():
+        # If the test was run from a directory containing .wandb, then __stage_dir__
+        # was '.wandb' when imported by api.py, reload to fix. UGH!
+        reload(wandb)
+        result = runner.invoke(cli.login, [DUMMY_API_KEY])
+        print('Output: ', result.output)
+        print('Exception: ', result.exception)
+        print('Traceback: ', traceback.print_tb(result.exc_info[2]))
+        assert result.exit_code == 0
+        with open("netrc", "r") as f:
+            generatedNetrc = f.read()
+        assert DUMMY_API_KEY in generatedNetrc
+
+
+def test_signup(runner, empty_netrc, local_netrc):
+    with runner.isolated_filesystem():
+        # If the test was run from a directory containing .wandb, then __stage_dir__
+        # was '.wandb' when imported by api.py, reload to fix. UGH!
+        reload(wandb)
+        sigint(0.1)
+        result = runner.invoke(cli.signup)
+        print('Output: ', result.output)
+        print('Exception: ', result.exception)
+        print('Traceback: ', traceback.print_tb(result.exc_info[2]))
+        assert result.exit_code == 0
+        assert "No key provided, please try again" in result.output
+
+
+def test_init_new_login_no_browser(runner, empty_netrc, local_netrc, request_mocker, query_projects, query_viewer, monkeypatch):
     mock = query_projects(request_mocker)
     query_viewer(request_mocker)
+    monkeypatch.setattr(webbrowser, 'open_new_tab', lambda x: False)
     with runner.isolated_filesystem():
         # If the test was run from a directory containing .wandb, then __stage_dir__
         # was '.wandb' when imported by api.py, reload to fix. UGH!
@@ -344,6 +302,7 @@ def test_init_new_login(runner, empty_netrc, local_netrc, request_mocker, query_
             generatedWandb = f.read()
         assert DUMMY_API_KEY in generatedNetrc
         assert "test_model" in generatedWandb
+        assert "Successfully logged in" in result.output
 
 
 @pytest.mark.teams("foo", "bar")
@@ -412,7 +371,7 @@ def test_init_existing_login(runner, local_netrc, request_mocker, query_projects
     query_projects(request_mocker)
     with runner.isolated_filesystem():
         with open("netrc", "w") as f:
-            f.write("machine api.wandb.ai\n\ttest\t12345")
+            f.write("machine api.wandb.ai\n\tlogin test\tpassword 12345")
         result = runner.invoke(cli.init, input="vanpelt\n")
         print(result.output)
         print(result.exception)
@@ -422,3 +381,103 @@ def test_init_existing_login(runner, local_netrc, request_mocker, query_projects
             generatedWandb = f.read()
         assert "test_model" in generatedWandb
         assert "This directory is configured" in result.output
+
+
+def test_run_with_error(runner, request_mocker, upsert_run, git_repo):
+    upsert_run(request_mocker)
+    # TODO: Prevent syncing from happening
+    sigint(0.5)
+    result = runner.invoke(cli.run, ["missing.py"])
+    print(result.output)
+    print(result.exception)
+    print(traceback.print_tb(result.exc_info[2]))
+    assert "command not found" in str(result.output)
+    assert result.exit_code == 1
+
+
+# TODO: this is hitting production
+def test_run_simple(runner, monkeypatch, request_mocker, upsert_run, query_project, git_repo, upload_logs, upload_url):
+    run_id = "abc123"
+    upsert_run(request_mocker)
+    upload_logs(request_mocker, run_id)
+    query_project(request_mocker)
+    upload_url(request_mocker)
+    with open("simple.py", "w") as f:
+        f.write('print("Done!")')
+    monkeypatch.setattr('wandb.cli.api.push', lambda *args, **kwargs: True)
+    monkeypatch.setattr('time.sleep', lambda s: True)
+    result = runner.invoke(
+        cli.run, ["--id=%s" % run_id, "python", "simple.py"])
+    print(result.output)
+    print(result.exception)
+    print(traceback.print_tb(result.exc_info[2]))
+    assert "Verifying uploaded files... verified!" in result.output
+    assert result.exit_code == 0
+
+
+def test_sweep_no_config(runner):
+    result = runner.invoke(cli.sweep, ["missing.yaml"])
+    print(result.output)
+    print(result.exception)
+    print(traceback.print_tb(result.exc_info[2]))
+    assert "ERROR: Couldn't open sweep file" in result.output
+    assert result.exit_code == 0
+
+
+def test_board_error(runner, mocker, git_repo):
+    result = runner.invoke(cli.board)
+    print(result.output)
+    print(result.exception)
+    print(traceback.print_tb(result.exc_info[2]))
+    assert result.exit_code == 1
+    assert "No runs found in this directory" in result.output
+
+
+def test_board_bad_dir(runner, mocker):
+    result = runner.invoke(cli.board, ["--logdir", "non-existent"])
+    print("F", result.output)
+    print("E", result.exception)
+    print(traceback.print_tb(result.exc_info[2]))
+    assert result.exit_code != 0
+    assert "Directory does not exist" in str(result.output)
+
+
+def test_board_custom_dir(runner, mocker, monkeypatch):
+    from wandb.board.tests.util import basic_fixture_path
+    from wandb.board.app.graphql.loader import load
+    app = mocker.MagicMock()
+
+    def create(config, path):
+        load(path)
+        return app
+    monkeypatch.setattr('wandb.board.create_app', create)
+    result = runner.invoke(cli.board, ["--logdir", basic_fixture_path])
+    print(result.output)
+    print(result.exception)
+    print(traceback.print_tb(result.exc_info[2]))
+    assert result.exit_code == 0
+    assert app.run.called
+
+
+def test_resume_never(runner, request_mocker, upsert_run, query_run_resume_status, git_repo):
+    query_run_resume_status(request_mocker)
+    upsert_run(request_mocker, error=['Bucket with that name already exists'])
+    # default is --resume="never"
+    result = runner.invoke(cli.run, ["missing.py"])
+    print(result.output)
+    print(result.exception)
+    print(traceback.print_tb(result.exc_info[2]))
+    assert "resume='never'" in str(result.output)
+    assert result.exit_code == 1
+
+
+def test_resume_must(runner, request_mocker, query_run_resume_status, git_repo):
+    query_run_resume_status(request_mocker, status_code=404)
+    result = runner.invoke(cli.run, ["--resume=must", "missing.py"])
+    print(result.output)
+    print(result.exception)
+    print(traceback.print_tb(result.exc_info[2]))
+    assert "resume='must'" in str(result.output)
+    assert result.exit_code == 1
+
+# TODO: test actual resume

@@ -2,10 +2,10 @@ import React, {Component} from 'react';
 import {graphql} from 'react-apollo';
 import {bindActionCreators} from 'redux';
 import {connect} from 'react-redux';
-import {Container, Header, Loader, Item, Button} from 'semantic-ui-react';
+import {Container, Header, Item, Button} from 'semantic-ui-react';
+import Loader from '../components/Loader';
 import ModelHeader from '../components/ModelHeader';
 import Markdown from '../components/Markdown';
-import ErrorPage from '../components/ErrorPage';
 import {MODELS_QUERY} from '../graphql/models';
 import {updateLocationParams} from '../actions/location';
 
@@ -26,11 +26,9 @@ class Models extends Component {
   }
 
   render() {
-    return this.props.error ? (
-      <ErrorPage error={this.props.error} history={this.props.history} />
-    ) : (
+    return (
       <Container>
-        <Loader active={this.props.loading} size="massive" />
+        {this.props.loading && <Loader />}
         {this.props.user && (
           <Button
             as="a"
@@ -44,31 +42,32 @@ class Models extends Component {
         <Item.Group divided relaxed>
           {this.models().map(edge => (
             <Item style={{display: 'block'}} key={edge.node.id}>
-              <ModelHeader condensed={true} model={edge.node} />
+              <ModelHeader condensed={true} project={edge.node} />
               <div style={{marginTop: 16}} />
               <Markdown content={edge.node.description} />
             </Item>
           ))}
           {!this.props.loading &&
             this.models().length === 0 && (
-              <Markdown
-                content={`
-### Install the client and start tracking runs
-~~~bash
-$ pip install wandb
-$ cd training_dir
-$ wandb init
-$ vi train.py
-$ > import wandb
-$ > wandb.init()
-$ wandb run --show train.py
-~~~
-
-<br/>
-
-Visit our [documentation](http://docs.wandb.com/) for more information.
-        `}
-              />
+              <div>
+                <br />
+                <h4>No runs for this project yet.</h4>
+                <p>New to wandb?</p>
+                <ol>
+                  <li>
+                    Visit the getting started{' '}
+                    <a href="https://docs.wandb.com/docs/started.html">
+                      documentation.
+                    </a>
+                  </li>
+                  <li>
+                    Take a look at our{' '}
+                    <a href="https://docs.wandb.com/docs/examples.html">
+                      example projects.
+                    </a>
+                  </li>
+                </ol>
+              </div>
             )}
         </Item.Group>
       </Container>
@@ -116,9 +115,7 @@ const modelsMapDispatchToProps = (dispatch, ownProps) => {
   return bindActionCreators({updateLocationParams}, dispatch);
 };
 
-Models = connect(null, modelsMapDispatchToProps)(Models);
-
 // export dumb component for testing purposes
 export {Models};
 
-export default withData(Models);
+export default withData(connect(null, modelsMapDispatchToProps)(Models));

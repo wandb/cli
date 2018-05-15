@@ -1,15 +1,9 @@
 import React, {Component} from 'react';
 import {connect} from 'react-redux';
-import {NavLink, Link} from 'react-router-dom';
-import {
-  Menu,
-  Container,
-  Dropdown,
-  Image,
-  Message,
-  Transition,
-} from 'semantic-ui-react';
-import logo from '../assets/logo.svg';
+import {NavLink, withRouter} from 'react-router-dom';
+import {Menu, Container, Message, Transition} from 'semantic-ui-react';
+import logo from '../assets/wandb.svg';
+
 import '../components/Nav.css';
 
 class Nav extends Component {
@@ -28,21 +22,25 @@ class Nav extends Component {
   }
 
   render() {
-    const {user} = this.props;
-    const {params} = this.props;
     const flash = this.props.flash || {};
-
     return (
       <Menu fixed="top" borderless>
-        <Container style={{position: 'relative'}}>
-          <NavLink exact to="/" className="item">
-            <img src={logo} className="logo" alt="Weights & Biases" />
+        <Container fluid style={{marginLeft: 10, position: 'relative'}}>
+          <NavLink exact to="/" className="item logo">
+            <img src={logo} alt="W&B" />
           </NavLink>
-          {
-            <NavLink to={`/`} className="item">
-              Runs
-            </NavLink>
-          }
+          <NavLink
+            to={`/`}
+            isActive={() =>
+              //TODO: very unfortunate
+              this.props.location.pathname.indexOf('dashboards') === -1
+            }
+            className="item">
+            Runs
+          </NavLink>
+          <NavLink to={`/dashboards/edit`} className="item">
+            Dashboards
+          </NavLink>
           <Menu.Menu position="right" />
           <Transition
             animation="fly down"
@@ -59,7 +57,7 @@ class Nav extends Component {
               compact
               style={{
                 position: 'absolute',
-                right: 0,
+                right: 10,
                 top: 50,
                 paddingRight: 30,
               }}>
@@ -79,4 +77,4 @@ function mapStateToProps(state, ownProps) {
   };
 }
 
-export default connect(mapStateToProps)(Nav);
+export default withRouter(connect(mapStateToProps)(Nav));

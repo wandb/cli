@@ -24,16 +24,19 @@ import time
 import traceback
 import yaml
 import threading
+import random
 
 from click.utils import LazyFile
-from click.exceptions import BadParameter, ClickException
+from click.exceptions import BadParameter, ClickException, Abort
 import whaaaaat
+from six.moves import BaseHTTPServer, urllib
+import socket
 
 import wandb
 from wandb.api import Api
-from wandb.config import Config
-from wandb.pusher import LogPuller
+from wandb.wandb_config import Config
 from wandb import agent as wandb_agent
+from wandb import env
 from wandb import wandb_run
 from wandb import wandb_dir
 from wandb import util
@@ -54,6 +57,75 @@ class ClickWandbException(ClickException):
         else:
             return ('An Exception was raised, see %s for full traceback.\n'
                     '%s: %s' % (log_file, orig_type, self.message))
+
+
+class CallbackHandler(BaseHTTPServer.BaseHTTPRequestHandler):
+    """Simple callback handler that stores query string parameters and 
+    shuts down the server.
+    """
+
+    def do_GET(self):
+        self.server.result = urllib.parse.parse_qs(
+            self.path.split("?")[-1])
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'Success')
+        self.server.stop()
+
+
+class LocalServer():
+    """A local HTTP server that finds an open port and listens for a callback.
+    The urlencoded callback url is accessed via `.qs` the query parameters passed
+    to the callback are accessed via `.result`
+    """
+
+    def __init__(self):
+        self.blocking = True
+        self.port = 8666
+        self.connect()
+        self._server.result = {}
+        self._server.stop = self.stop
+
+    def connect(self, attempts=1):
+        try:
+            self._server = BaseHTTPServer.HTTPServer(
+                ('127.0.0.1', self.port), CallbackHandler)
+        except socket.error:
+            if attempts < 5:
+                self.port += random.randint(1, 1000)
+                self.connect(attempts + 1)
+            else:
+                logging.info(
+                    "Unable to start local server, proceeding manually")
+
+                class FakeServer():
+                    def serve_forever(self):
+                        pass
+                self._server = FakeServer()
+
+    def qs(self):
+        return urllib.parse.urlencode({
+            "callback": "http://127.0.0.1:{}/callback".format(self.port)})
+
+    @property
+    def result(self):
+        return self._server.result
+
+    def start(self, blocking=True):
+        self.blocking = blocking
+        if self.blocking:
+            self._server.serve_forever()
+        else:
+            t = threading.Thread(target=self._server.serve_forever)
+            t.daemon = True
+            t.start()
+
+    def stop(self, *args):
+        t = threading.Thread(target=self._server.shutdown)
+        t.daemon = True
+        t.start()
+        if not self.blocking:
+            os.kill(os.getpid(), signal.SIGINT)
 
 
 def display_error(func):
@@ -108,8 +180,11 @@ def prompt_for_project(ctx, entity):
                 'message': "Which project should we use?",
                 'choices': project_names + ["Create New"]
             }
-            project = whaaaaat.prompt([question])['project_name']
-
+            result = whaaaaat.prompt([question])
+            if result:
+                project = result['project_name']
+            else:
+                project = "Create New"
             # TODO: check with the server if the project exists
             if project == "Create New":
                 project = click.prompt(
@@ -130,7 +205,8 @@ def write_netrc(host, entity, key):
             'API-key must be exactly 40 characters long: %s (%s chars)' % (key, len(key)))
         return None
     try:
-        print("Appending to netrc %s" % os.path.expanduser('~/.netrc'))
+        print("Appending key to your netrc file: %s" %
+              os.path.expanduser('~/.netrc'))
         normalized_host = host.split("/")[-1].split(":")[0]
         machine_line = 'machine %s' % normalized_host
         path = os.path.expanduser('~/.netrc')
@@ -158,6 +234,7 @@ def write_netrc(host, entity, key):
             """).format(host=normalized_host, entity=entity, key=key))
         os.chmod(os.path.expanduser('~/.netrc'),
                  stat.S_IRUSR | stat.S_IWUSR)
+        return True
     except IOError as e:
         click.secho("Unable to read ~/.netrc", fg="red")
         return None
@@ -170,6 +247,7 @@ def editor(content='', marker='# Enter a description, markdown is allowed!\n'):
 
 
 api = Api()
+
 
 # Some commands take project/entity etc. as arguments. We provide default
 # values for those arguments from the current project configuration, as
@@ -188,7 +266,7 @@ class RunGroup(click.Group):
         return None
 
 
-@click.command(cls=RunGroup)
+@click.command(cls=RunGroup, invoke_without_command=True)
 @click.version_option(version=wandb.__version__)
 @click.pass_context
 def cli(ctx):
@@ -196,12 +274,14 @@ def cli(ctx):
 
     Run "wandb docs" for full documentation.
     """
-    pass
+    wandb.try_to_set_up_logging()
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
 
 
 @cli.command(context_settings=CONTEXT, help="List projects")
 @require_init
-@click.option("--entity", "-e", default="models", envvar='WANDB_ENTITY', help="The entity to scope the listing to.")
+@click.option("--entity", "-e", default=None, envvar=env.ENTITY, help="The entity to scope the listing to.")
 @display_error
 def projects(entity, display=True):
     projects = api.list_projects(entity=entity)
@@ -222,8 +302,8 @@ def projects(entity, display=True):
 
 @cli.command(context_settings=CONTEXT, help="List runs in a project")
 @click.pass_context
-@click.option("--project", "-p", default=None, envvar='WANDB_PROJECT', help="The project you wish to list runs from.")
-@click.option("--entity", "-e", default="models", envvar='WANDB_ENTITY', help="The entity to scope the listing to.")
+@click.option("--project", "-p", default=None, envvar=env.PROJECT, help="The project you wish to list runs from.")
+@click.option("--entity", "-e", default=None, envvar=env.ENTITY, help="The entity to scope the listing to.")
 @display_error
 @require_init
 def runs(ctx, project, entity):
@@ -241,9 +321,9 @@ def runs(ctx, project, entity):
 
 
 @cli.command(context_settings=CONTEXT, help="List local & remote file status")
-@click.argument("run", envvar='WANDB_RUN')
+@click.argument("run", envvar=env.RUN)
 @click.option("--settings/--no-settings", help="Show the current settings", default=True)
-@click.option("--project", "-p", envvar='WANDB_PROJECT', help="The project you wish to upload to.")
+@click.option("--project", "-p", envvar=env.PROJECT, help="The project you wish to upload to.")
 @display_error
 def status(run, settings, project):
     if settings:
@@ -261,10 +341,10 @@ def status(run, settings, project):
 
 
 @cli.command(context_settings=CONTEXT, help="Restore code and config state for a run")
-@click.argument("run", envvar='WANDB_RUN')
+@click.argument("run", envvar=env.RUN)
 @click.option("--branch/--no-branch", default=True, help="Whether to create a branch or checkout detached")
-@click.option("--project", "-p", envvar='WANDB_PROJECT', help="The project you wish to upload to.")
-@click.option("--entity", "-e", default="models", envvar='WANDB_ENTITY', help="The entity to scope the listing to.")
+@click.option("--project", "-p", envvar=env.PROJECT, help="The project you wish to upload to.")
+@click.option("--entity", "-e", default="models", envvar=env.ENTITY, help="The entity to scope the listing to.")
 @display_error
 def restore(run, branch, project, entity):
     project, run = api.parse_slug(run, project=project)
@@ -298,7 +378,7 @@ def restore(run, branch, project, entity):
                     "Can't find commit from which to restore code")
         else:
             if patch_content:
-                patch_path = os.path.join(wandb.__stage_dir__, 'diff.patch')
+                patch_path = os.path.join(wandb.wandb_dir(), 'diff.patch')
                 with open(patch_path, "w") as f:
                     f.write(patch_content)
             else:
@@ -336,40 +416,12 @@ def restore(run, branch, project, entity):
     click.echo("Restored config variables")
 
 
-#@cli.command(context_settings=CONTEXT, help="Push files to Weights & Biases")
-@click.argument("run", envvar='WANDB_RUN')
-@click.option("--project", "-p", envvar='WANDB_PROJECT', help="The project you wish to upload to.")
-@click.option("--description", "-m", help="A description to associate with this upload.")
-@click.option("--entity", "-e", default="models", envvar='WANDB_ENTITY', help="The entity to scope the listing to.")
-@click.option("--force/--no-force", "-f", default=False, help="Whether to force git tag creation.")
-@click.argument("files", type=click.File('rb'), nargs=-1)
-@click.pass_context
+@cli.command(context_settings=CONTEXT, help="Pull files from Weights & Biases")
+@click.argument("run", envvar=env.RUN)
+@click.option("--project", "-p", envvar=env.PROJECT, help="The project you want to download.")
+@click.option("--entity", "-e", default="models", envvar=env.ENTITY, help="The entity to scope the listing to.")
 @display_error
-def push(ctx, run, project, description, entity, force, files):
-    # TODO: do we support the case of a run with the same name as a file?
-    if os.path.exists(run):
-        raise BadParameter("Run id is required if files are specified.")
-    project, run = api.parse_slug(run, project=project)
-
-    click.echo("Updating run: {project}/{run}".format(
-        project=click.style(project, bold=True), run=run))
-
-    candidates = []
-    if len(files) == 0:
-        raise BadParameter("No files specified")
-
-    # TODO: Deal with files in a sub directory
-    api.push(project, files=[f.name for f in files], run=run,
-             description=description, entity=entity, force=force, progress=sys.stdout)
-
-
-#@cli.command(context_settings=CONTEXT, help="Pull files from Weights & Biases")
-@click.argument("run", envvar='WANDB_RUN')
-@click.option("--project", "-p", envvar='WANDB_PROJECT', help="The project you want to download.")
-@click.option("--kind", "-k", default="all", type=click.Choice(['all', 'model', 'weights', 'other']))
-@click.option("--entity", "-e", default="models", envvar='WANDB_ENTITY', help="The entity to scope the listing to.")
-@display_error
-def pull(project, run, kind, entity):
+def pull(project, run, entity):
     project, run = api.parse_slug(run, project=project)
 
     urls = api.download_urls(project, run=run, entity=entity)
@@ -392,40 +444,83 @@ def pull(project, run, kind, entity):
                         bar.update(len(data))
 
 
-@cli.command(context_settings=CONTEXT, help="Login to Weights & Biases")
+@cli.command(context_settings=CONTEXT, help="Signup for Weights & Biases")
+@click.pass_context
 @display_error
-def login():
+def signup(ctx):
+    import webbrowser
+    server = LocalServer()
+    url = api.app_url + "/login?invited"
+    launched = webbrowser.open_new_tab(
+        url + "&{}".format(server.qs()))
+    if launched:
+        signal.signal(signal.SIGINT, server.stop)
+        click.echo(
+            'Opened [{0}] in your default browser'.format(url))
+        server.start(blocking=False)
+        key = ctx.invoke(login, server=server, browser=False)
+        if key:
+            # Only init if we aren't pre-configured
+            if not os.path.isdir(wandb_dir()):
+                ctx.invoke(init)
+    else:
+        click.echo("Signup with this url in your browser: {0}".format(url))
+        click.echo("Then run wandb login")
+
+
+@cli.command(context_settings=CONTEXT, help="Login to Weights & Biases")
+@click.argument("key", nargs=-1)
+@display_error
+def login(key, server=LocalServer(), browser=True):
+    key = key[0] if len(key) > 0 else None
     # Import in here for performance reasons
     import webbrowser
-    # TODO: use Oauth and a local webserver: https://community.auth0.com/questions/6501/authenticating-an-installed-cli-with-oidc-and-a-th
-    url = api.app_url + '/profile?message=true'
+    # TODO: use Oauth?: https://community.auth0.com/questions/6501/authenticating-an-installed-cli-with-oidc-and-a-th
+    url = api.app_url + '/profile?message=key'
     # TODO: google cloud SDK check_browser.py
-    launched = webbrowser.open_new_tab(url)
+    if key or not browser:
+        launched = False
+    else:
+        launched = webbrowser.open_new_tab(url + "&{}".format(server.qs()))
     if launched:
         click.echo(
-            'Opening [{0}] in a new tab in your default browser.'.format(url))
-    else:
-        click.echo("You can find your API keys here: {0}".format(url))
+            'Opening [{0}] in your default browser'.format(url))
+        server.start(blocking=False)
+    elif not key and browser:
+        click.echo(
+            "You can find your API keys in your browser here: {0}".format(url))
 
-    key = click.prompt("{warning} Paste an API key from your profile".format(
-        warning=click.style("Not authenticated!", fg="red")),
-        value_proc=lambda x: x.strip())
+    def cancel_prompt(*args):
+        raise KeyboardInterrupt()
+    # if not os.getenv("WANDB_TEST"):
+    # Hijacking this signal was broke tests
+    signal.signal(signal.SIGINT, cancel_prompt)
+    try:
+        key = key or click.prompt("Paste an API key from your profile",
+                                  value_proc=lambda x: x.strip())
+    except Abort:
+        if server.result.get("key"):
+            key = server.result["key"][0]
 
     if key:
         # TODO: get the username here...
         # username = api.viewer().get('entity', 'models')
-        write_netrc(api.api_url, "user", key)
+        if write_netrc(api.api_url, "user", key):
+            click.secho(
+                "Successfully logged in to Weights & Biases!", fg="green")
+    else:
+        click.echo("No key provided, please try again")
+    return key
 
 
 @cli.command(context_settings=CONTEXT, help="Configure a directory with Weights & Biases")
 @click.pass_context
 @display_error
 def init(ctx):
-    from wandb import _set_stage_dir, wandb_dir
-    if wandb_dir() is None:
+    from wandb import _set_stage_dir, __stage_dir__, wandb_dir
+    if __stage_dir__ is None:
         _set_stage_dir('wandb')
-    wandb_path = os.path.join(os.getcwd(), wandb_dir())
-    if os.path.isdir(wandb_path):
+    if os.path.isdir(wandb_dir()):
         click.confirm(click.style(
             "This directory has been configured previously, should we re-configure it?", bold=True), abort=True)
     else:
@@ -449,7 +544,12 @@ def init(ctx):
             'message': "Which team should we use?",
             'choices': team_names + ["Manual Entry"]
         }
-        entity = whaaaaat.prompt([question])['team_name']
+        result = whaaaaat.prompt([question])
+        # result can be empty on click
+        if result:
+            entity = result['team_name']
+        else:
+            entity = "Manual Entry"
         if entity == "Manual Entry":
             entity = click.prompt("Enter the name of the team you want to use")
     else:
@@ -462,8 +562,8 @@ def init(ctx):
     except wandb.cli.ClickWandbException:
         raise ClickException('Could not find team: %s' % entity)
 
-    if not os.path.isdir(wandb_path):
-        os.mkdir(wandb_path)
+    if not os.path.isdir(wandb_dir()):
+        os.mkdir(wandb_dir())
 
     with open(os.path.join(wandb_dir(), 'settings'), "w") as file:
         print('[default]', file=file)
@@ -474,6 +574,36 @@ def init(ctx):
     with open(os.path.join(wandb_dir(), '.gitignore'), "w") as file:
         file.write("*\n!settings")
 
+    click.echo(click.style("This directory is configured!  Next, track a run:\n", fg="green") +
+               textwrap.dedent("""\
+        * In your training script:
+            {code1}
+            {code2}
+        * then `{run}`.
+        """).format(
+        code1=click.style("import wandb", bold=True),
+        code2=click.style("wandb.init()", bold=True),
+        run=click.style("python <train.py>", bold=True),
+        # saving this here so I can easily put it back when we re-enable
+        # push/pull
+        #"""
+        #* Run `{push}` to manually add a file.
+        #* Pull popular models into your project with: `{pull}`.
+        #"""
+        # push=click.style("wandb push run_id weights.h5", bold=True),
+        # pull=click.style("wandb pull models/inception-v4", bold=True)
+    ))
+
+
+@cli.group()
+def config():
+    """Manage this projects configuration."""
+    pass
+
+
+@config.command("init", help="Initialize a directory with wandb configuration")
+@display_error
+def config_init():
     config_defaults_path = 'config-defaults.yaml'
     if not os.path.exists(config_defaults_path):
         with open(config_defaults_path, 'w') as file:
@@ -490,26 +620,8 @@ def init(ctx):
                 #   desc: Size of each mini-batch
                 #   value: 32
                 """))
-
-    click.echo(click.style("This directory is configured!  Next, track a run:\n", fg="green") +
-               textwrap.dedent("""\
-        * In your training script:
-            {code1}
-            {code2}
-        * then `{run}`.
-        """).format(
-        code1=click.style("import wandb", bold=True),
-        code2=click.style("wandb.init()", bold=True),
-        run=click.style("wandb run <train.py>", bold=True),
-        # saving this here so I can easily put it back when we re-enable
-        # push/pull
-        #"""
-        #* Run `{push}` to manually add a file.
-        #* Pull popular models into your project with: `{pull}`.
-        #"""
-        # push=click.style("wandb push run_id weights.h5", bold=True),
-        # pull=click.style("wandb pull models/inception-v4", bold=True)
-    ))
+    click.echo(
+        "Edit config-defaults.yaml with your default configuration parameters.")
 
 
 @cli.command(context_settings=CONTEXT, help="Open documentation in a browser")
@@ -531,56 +643,6 @@ RUN_CONTEXT['allow_extra_args'] = True
 RUN_CONTEXT['ignore_unknown_options'] = True
 
 
-def pending_loop(pod_id):
-    def elip(times):
-        return "." * (times % 4)
-    i = 0
-    wandb.termlog("Waiting for run to start%s\r" % elip(i), False)
-    while True:
-        try:
-            i += 1
-            if i > 3600:
-                wandb.termlog("Unknown error")
-                break
-            res = requests.get(
-                "http://kubed.endpoints.playground-111.cloud.goog/pods/%s" % pod_id)
-            logging.debug('\n'.join([', '.join([c["type"], c["status"], str(c["message"])])
-                                     for c in res.json()["status"]["conditions"]]))
-            if res.json()["status"]["phase"] == "Pending":
-                i -= 1
-                for x in range(10):
-                    i += 1
-                    wandb.termlog("Waiting for run to start%s   \r" %
-                                  elip(i), False)
-                    time.sleep(1)
-            else:
-                wandb.termlog("Waiting no more.  Here we go!      ")
-                break
-        except:
-            logging.debug(sys.exc_info()[1])
-            time.sleep(10)
-
-
-@cli.command(context_settings=RUN_CONTEXT, help="Synchronize files and output streams for an already-running user process")
-@click.pass_context
-@require_init
-@click.argument('headless_args_json')
-@display_error
-def headless(ctx, headless_args_json):
-    args = json.loads(headless_args_json)
-    user_process_pid = args['pid']
-    stdout_master_fd = args['stdout_master_fd']
-    stderr_master_fd = args['stderr_master_fd']
-
-    run = wandb_run.Run.from_environment_or_defaults()
-    api.set_current_run_id(run.id)
-
-    rm = run_manager.RunManager(
-        api, run, cloud=args['cloud'], job_type=args['job_type'])
-    rm.wrap_existing_process(
-        user_process_pid, stdout_master_fd, stderr_master_fd)
-
-
 @cli.command(context_settings=RUN_CONTEXT, help="Launch a job")
 @click.pass_context
 @require_init
@@ -588,6 +650,8 @@ def headless(ctx, headless_args_json):
 @click.argument('args', nargs=-1)
 @click.option('--id', default=None,
               help='Run id to use, default is to generate.')
+@click.option('--resume', default='never', type=click.Choice(['never', 'must', 'allow']),
+              help='Resume strategy, default is never')
 @click.option('--dir', default=None,
               help='Files in this directory will be saved to wandb, defaults to wandb')
 @click.option('--configs', default=None,
@@ -597,57 +661,44 @@ def headless(ctx, headless_args_json):
 @click.option("--show/--no-show", default=False,
               help="Open the run page in your default browser.")
 @display_error
-def run(ctx, program, args, id, dir, configs, message, show):
-    api.ensure_configured()
+def run(ctx, program, args, id, resume, dir, configs, message, show):
+    wandb.ensure_configured()
     if configs:
         config_paths = configs.split(',')
     else:
         config_paths = []
     config = Config(config_paths=config_paths,
                     wandb_dir=dir or wandb.wandb_dir())
-    run = wandb_run.Run(run_id=id, mode='run',
-                        config=config, description=message)
+    run = wandb_run.Run(run_id=id, mode='clirun',
+                        config=config, description=message,
+                        program=program,
+                        resume=resume)
 
     api.set_current_run_id(run.id)
 
-    # TODO: better failure handling
-    root = api.git.root
-    remote_url = api.git.remote_url
-    host = socket.gethostname()
-    # handle non-git directories
-    if not root:
-        root = os.path.abspath(os.getcwd())
-        remote_url = 'file://%s%s' % (host, root)
-
-    upsert_result = api.upsert_run(name=run.id,
-                                   project=api.settings("project"),
-                                   entity=api.settings("entity"),
-                                   config=run.config.as_dict(), description=run.description, host=host,
-                                   program_path=program, repo=remote_url, sweep_name=run.sweep_id)
-    run.storage_id = upsert_result['id']
-    env = dict(os.environ)
-    run.set_environment(env)
+    environ = dict(os.environ)
     if configs:
-        env['WANDB_CONFIG_PATHS'] = configs
+        environ[env.CONFIG_PATHS] = configs
     if show:
-        env['WANDB_SHOW_RUN'] = 'True'
+        environ[env.SHOW_RUN] = 'True'
 
     try:
-        rm = run_manager.RunManager(api, run, program=program)
+        rm = run_manager.RunManager(api, run)
+        rm.init_run(environ)
     except run_manager.Error:
         exc_type, exc_value, exc_traceback = sys.exc_info()
         wandb.termerror('An Exception was raised during setup, see %s for full traceback.' %
                         util.get_log_file_path())
-        wandb.termerror(exc_value)
+        wandb.termerror(str(exc_value))
         if 'permission' in str(exc_value):
             wandb.termerror(
                 'Are you sure you provided the correct API key to "wandb login"?')
         lines = traceback.format_exception(
             exc_type, exc_value, exc_traceback)
         logger.error('\n'.join(lines))
-        return
+        sys.exit(1)
 
-    rm.run_user_process(program, args, env)
+    rm.run_user_process(program, args, environ)
 
 
 @cli.command(context_settings=CONTEXT, help="Create a sweep")
@@ -659,7 +710,7 @@ def sweep(ctx, config_yaml):
     click.echo('Creating sweep from: %s' % config_yaml)
     try:
         yaml_file = open(config_yaml)
-    except OSError:
+    except (OSError, IOError):
         wandb.termerror('Couldn\'t open sweep file: %s' % config_yaml)
         return
     try:
@@ -690,23 +741,31 @@ def agent(sweep_id):
 @cli.command(context_settings=CONTEXT, help="Start a local WandB Board server")
 @click.option('--port', '-p', default=7177,
               help='The port to start the server on')
-@click.option('--host', '-h', default="0.0.0.0",
+@click.option('--host', '-h', default="localhost",
               help='The host to bind to')
 @click.option('--logdir', default=".",
               help='The directory to find wandb logs')
 @display_error
 def board(port, host, logdir):
     import webbrowser
-    if logdir != ".":
-        os.environ['WANDB_LOGDIR'] = os.path.abspath(logdir)
-    from wandb.board import app
+    import werkzeug.serving
+    path = os.path.abspath(logdir) if logdir != "." else None
+    if path and os.path.exists(path + "/wandb"):
+        path = path + "/wandb"
+    from wandb.board import create_app, data
+    app = create_app("default", path)
+    if len(data['Runs']) == 0:
+        raise ClickException(
+            "No runs found in this directory, specify a different directory with --logdir")
     dev = os.getenv('WANDB_ENV', "").startswith("dev")
     extra = "(dev)" if dev else ""
-    click.echo(
-        'Started wandb board on http://{0}:{1} ✨ {2}'.format(host, port, extra))
-
-    threading.Timer(1, webbrowser.open,
-                    ("http://{0}:{1}".format(host, port),)).start()
+    if not werkzeug.serving.is_running_from_reloader():
+        click.echo(
+            'Started wandb board on http://{0}:{1} ✨ {2}'.format(host, port, extra))
+        threading.Timer(1, webbrowser.open_new_tab,
+                        ("http://{0}:{1}".format(host, port),)).start()
+    elif dev:
+        click.echo("Reloading backend...")
     app.run(host, port, threaded=True, debug=dev)
 
 

@@ -71,8 +71,8 @@ class LineBuffer(object):
 class TextStreamPusher(object):
     """Pushes a stream of text, line by line, to wandb."""
 
-    def __init__(self, fsapi, filename, line_prepend='', prepend_timestamp=False):
-        """Conctructor.
+    def __init__(self, fsapi, filename, line_prepend='', prepend_timestamp=False, lock_function=None):
+        """Constructor.
 
         Args:
             fsapi: api.FileStreamApi instance
@@ -80,6 +80,10 @@ class TextStreamPusher(object):
             line_prepend: string to prepend to every line for this stream.
             prepend_timestamp: If true a timestamp will be prepended to each line
                 (after line_prepend).
+            lock_function: Optional function to call before writing data to the
+                backend. We use this to block writes while the backend is down.
+                The function should both acquire and release the lock because we
+                don't actually want to hold the lock.
         """
         self._fsapi = fsapi
         self._filename = filename
@@ -87,6 +91,7 @@ class TextStreamPusher(object):
             line_prepend += ' '
         self._line_prepend = line_prepend
         self._prepend_timestamp = prepend_timestamp
+        self._lock_function = lock_function
         self._line_buffer = LineBuffer()
 
     def write_string(self, message, cur_time=None):
@@ -99,10 +104,14 @@ class TextStreamPusher(object):
             message: a string to push for this file.
             cur_time: used for unit testing. override line timestamp.
         """
+        #print('ts write', repr(message))
+        if self._lock_function:
+            self._lock_function()
         if cur_time is None:
             cur_time = time.time()
         lines = self._line_buffer.add_string(message)
         for line in lines:
+            #print('ts line', repr(line))
             timestamp = ''
             if self._prepend_timestamp:
                 timestamp = datetime.datetime.utcfromtimestamp(

@@ -1,6 +1,6 @@
-body {
+/* body {
   overflow-x: auto !important;
-}
+} */
 
 #root > div {
   display: flex;
@@ -11,16 +11,14 @@ body {
   flex: 1;
   padding-bottom: 50px;
 }
-#root .menu .logo {
-  width: 3.8em;
-  padding: -10px 0;
-}
+
 .auth0-lock.auth0-lock .auth0-lock-name {
   overflow: visible !important;
 }
 .main {
   margin-top: 5em;
 }
+
 .main .ui.large.breadcrumb {
   height: 40px;
 }
@@ -53,6 +51,7 @@ img.logo.inverted {
 }
 .footer {
   color: #888 !important;
+  background-color: #f4f4f4 !important;
 }
 .model .ui.mini.statistics .statistic > .value,
 .model .ui.mini.statistics .statistic > .label {
@@ -74,17 +73,78 @@ img.logo.inverted {
   margin: 8px 0;
 }
 body .ui.table tr.active {
-  background-color:#e5f9e7 !important;
+  background-color: #e5f9e7 !important;
 }
 body .ui.form .field {
   margin: 0 0 2em;
 }
+
+/*
+LB What's all this stuff doing??
 body .ui.active.button {
-  background-color:#e5f9e7 !important;
+  background-color: #e5f9e7 !important;
 }
+*/
 
 body .input-style {
-  border: 1px solid rgba(34,36,38,.15);
+  border: 1px solid rgba(34, 36, 38, 0.15);
   padding: 0 8px 8px 8px;
-  border-radius: .29rem;
+  border-radius: 0.29rem;
+}
+
+body.blurring.dimmed.dimmable > :not(.dimmer) {
+  -webkit-filter: blur(3px) grayscale(0.1);
+  /* transition: filter 4s linear; */
+  filter: blur(3px) grayscale(0.1);
+}
+
+body.blurring.dimmable > .dimmer {
+  background-color: rgba(0, 0, 0, 0.1);
+}
+
+body .ui.grid > .column:not(.row) {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+.fullScreen .fixed.menu .item:not(.logo) {
+  display: none;
+}
+
+.fullScreen .fixed.menu .dropdown {
+  display: none;
+}
+
+.fullScreen .secondary.menu {
+  display: none;
+}
+
+#root .fullScreen .menu .item .logo {
+  width: 14em;
+  padding: -10px 0;
+}
+
+#root .fullScreen .menu .exitFullScreen {
+  display: none;
+}
+
+#root .fullScreen .menu:hover .exitFullScreen {
+  display: inline;
+}
+
+body .ui.dropdown .menu .selected.item,
+.ui.dropdown.selected {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+/* These fix the loader when shown in a modal
+   https://github.com/Semantic-Org/Semantic-UI/issues/4014 */
+.ui.dimmer .ui.modal .ui.loader {
+  color: #333;
+}
+.ui.dimmer .ui.modal .ui.loader:before {
+  border-color: rgba(0, 0, 0, 0.1);
+}
+.ui.dimmer .ui.modal .ui.loader:after {
+  border-color: #767676 transparent transparent;
 }

@@ -1,14 +1,16 @@
 import datetime
 import os
 import shortuuid
+import socket
 
 import wandb
+from wandb import history
 from wandb import jsonlfile
 from wandb import summary
 from wandb import meta
 from wandb import typedtable
 from wandb import util
-from wandb.config import Config
+from wandb.wandb_config import Config
 import atexit
 import sys
 
@@ -19,10 +21,21 @@ DESCRIPTION_FNAME = 'description.md'
 
 
 class Run(object):
-    def __init__(self, run_id=None, mode=None, dir=None, config=None, sweep_id=None, storage_id=None, description=None):
+    def __init__(self, run_id=None, mode=None, dir=None, config=None, sweep_id=None, storage_id=None, description=None, resume=None, program=None, wandb_dir=None):
         # self.id is actually stored in the "name" attribute in GQL
         self.id = run_id if run_id else generate_id()
-        self.mode = mode if mode else 'dryrun'
+        self.resume = resume if resume else 'never'
+        self.mode = mode if mode else 'run'
+
+        self.program = program
+        if not self.program:
+            try:
+                import __main__
+                self.program = __main__.__file__
+            except (ImportError, AttributeError):
+                # probably `python -c`, an embedded interpreter or something
+                self.program = '<python with no main file>'
+        self.wandb_dir = wandb_dir
 
         if dir is None:
             self._dir = run_dir_path(self.id, dry=self.mode == 'dryrun')
@@ -37,6 +50,8 @@ class Run(object):
 
         # this is the GQL ID:
         self.storage_id = storage_id
+        # socket server, currently only available in headless mode
+        self.socket = None
 
         if description is not None:
             self.description = description
@@ -68,12 +83,18 @@ class Run(object):
         if environment is None:
             environment = os.environ
         run_id = environment.get('WANDB_RUN_ID')
+        resume = environment.get('WANDB_RESUME')
         storage_id = environment.get('WANDB_RUN_STORAGE_ID')
         mode = environment.get('WANDB_MODE')
         run_dir = environment.get('WANDB_RUN_DIR')
         sweep_id = environment.get('WANDB_SWEEP_ID')
+        program = environment.get('WANDB_PROGRAM')
+        wandb_dir = environment.get('WANDB_DIR')
         config = Config.from_environment_or_defaults()
-        run = cls(run_id, mode, run_dir, config, sweep_id, storage_id)
+        run = cls(run_id, mode, run_dir, config,
+                  sweep_id, storage_id, program=program,
+                  wandb_dir=wandb_dir,
+                  resume=resume)
         return run
 
     def set_environment(self, environment=None):
@@ -83,12 +104,17 @@ class Run(object):
         if environment is None:
             environment = os.environ
         environment['WANDB_RUN_ID'] = self.id
+        environment['WANDB_RESUME'] = self.resume
         if self.storage_id:
             environment['WANDB_RUN_STORAGE_ID'] = self.storage_id
         environment['WANDB_MODE'] = self.mode
         environment['WANDB_RUN_DIR'] = self.dir
+        if self.wandb_dir:
+            environment['WANDB_DIR'] = self.wandb_dir
         if self.sweep_id is not None:
             environment['WANDB_SWEEP_ID'] = self.sweep_id
+        if self.program is not None:
+            environment['WANDB_PROGRAM'] = self.program
 
     def _mkdir(self):
         util.mkdir_exists_ok(self._dir)
@@ -102,11 +128,18 @@ class Run(object):
         )
 
     @property
+    def host(self):
+        return socket.gethostname()
+
+    @property
     def dir(self):
         return self._dir
 
     @property
     def summary(self):
+        # If we added summary from history then manually reset before setting again
+        if self._user_accessed_summary == False and self._summary is not None:
+            self._summary._summary = {}
         # We use this to track whether user has accessed summary
         self._user_accessed_summary = True
         if self._summary is None:
@@ -126,7 +159,7 @@ class Run(object):
     @property
     def history(self):
         if self._history is None:
-            self._history = jsonlfile.JsonlFile(
+            self._history = history.History(
                 HISTORY_FNAME, self._dir, add_callback=self._history_added)
         return self._history
 
