@@ -9,12 +9,12 @@ from __future__ import absolute_import, print_function
 
 __author__ = """Chris Van Pelt"""
 __email__ = 'vanpelt@wandb.com'
-__version__ = '0.5.21r0'
+__version__ = '0.5.21r1'
 
 import atexit
 import click
 import io
-import jso
+import json
 import logging
 import time
 import os
