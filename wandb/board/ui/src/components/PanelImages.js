@@ -7,6 +7,7 @@ import Slider from 'react-slick';
 import 'slick-carousel/slick/slick.css';
 import 'slick-carousel/slick/slick-theme.css';
 import './PanelImages.css';
+import {unflatten} from 'flat';
 
 class ImagesPanel extends React.Component {
   state = {epoch: 0, containerWidth: 0};
@@ -29,9 +30,11 @@ class ImagesPanel extends React.Component {
      * { "loss": 3, "example":{"_type": "images"}}]
      * We want to find all keys where "_type" is ever set to images
      */
-
     let imageKeys = [];
     for (let row in history) {
+      history[row] = unflatten(history[row], {
+        safe: true,
+      });
       _.keys(history[row])
         .filter(k => {
           return (
