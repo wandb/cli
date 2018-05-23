@@ -29,7 +29,7 @@ import random
 from click.utils import LazyFile
 from click.exceptions import BadParameter, ClickException, Abort
 import whaaaaat
-from six.moves import BaseHTTPServer, urllib
+from six.moves import BaseHTTPServer, urllib, configparser
 import socket
 
 import wandb
@@ -196,48 +196,6 @@ def prompt_for_project(ctx, entity):
         raise ClickException(str(e))
 
     return project
-
-
-def write_netrc(host, entity, key):
-    """Add our host and key to .netrc"""
-    if len(key) != 40:
-        click.secho(
-            'API-key must be exactly 40 characters long: %s (%s chars)' % (key, len(key)))
-        return None
-    try:
-        print("Appending key to your netrc file: %s" %
-              os.path.expanduser('~/.netrc'))
-        normalized_host = host.split("/")[-1].split(":")[0]
-        machine_line = 'machine %s' % normalized_host
-        path = os.path.expanduser('~/.netrc')
-        orig_lines = None
-        try:
-            with open(path) as f:
-                orig_lines = f.read().strip().split('\n')
-        except (IOError, OSError) as e:
-            pass
-        with open(path, 'w') as f:
-            if orig_lines:
-                # delete this machine from the file if it's already there.
-                skip = 0
-                for line in orig_lines:
-                    if machine_line in line:
-                        skip = 2
-                    elif skip:
-                        skip -= 1
-                    else:
-                        f.write('%s\n' % line)
-            f.write(textwrap.dedent("""\
-            machine {host}
-              login {entity}
-              password {key}
-            """).format(host=normalized_host, entity=entity, key=key))
-        os.chmod(os.path.expanduser('~/.netrc'),
-                 stat.S_IRUSR | stat.S_IWUSR)
-        return True
-    except IOError as e:
-        click.secho("Unable to read ~/.netrc", fg="red")
-        return None
 
 
 def editor(content='', marker='# Enter a description, markdown is allowed!\n'):
@@ -505,7 +463,7 @@ def login(key, server=LocalServer(), browser=True):
     if key:
         # TODO: get the username here...
         # username = api.viewer().get('entity', 'models')
-        if write_netrc(api.api_url, "user", key):
+        if util.write_netrc(api.api_url, "user", key):
             click.secho(
                 "Successfully logged in to Weights & Biases!", fg="green")
     else:
@@ -562,14 +520,7 @@ def init(ctx):
     except wandb.cli.ClickWandbException:
         raise ClickException('Could not find team: %s' % entity)
 
-    if not os.path.isdir(wandb_dir()):
-        os.mkdir(wandb_dir())
-
-    with open(os.path.join(wandb_dir(), 'settings'), "w") as file:
-        print('[default]', file=file)
-        print('entity: {}'.format(entity), file=file)
-        print('project: {}'.format(project), file=file)
-        print('base_url: {}'.format(api.settings()['base_url']), file=file)
+    util.write_settings(entity, project, api.settings()['base_url'])
 
     with open(os.path.join(wandb_dir(), '.gitignore'), "w") as file:
         file.write("*\n!settings")
@@ -636,6 +587,39 @@ def docs(ctx):
     else:
         click.echo(click.style(
             "You can find our documentation here: %s" % DOCS_URL, fg="green"))
+
+
+@cli.command("on", help="Ensure W&B is enabled in this directory")
+@display_error
+def on():
+    wandb.ensure_configured()
+    api = Api()
+    parser = api.settings_parser
+    try:
+        parser.remove_option('default', 'disabled')
+        with open(api.settings_file, "w") as f:
+            parser.write(f)
+    except configparser.Error:
+        pass
+    click.echo(
+        "W&B enabled, running your script from this directory will now sync to the cloud.")
+
+
+@cli.command("off", help="Disable W&B in this directory, useful for testing")
+@display_error
+def off():
+    wandb.ensure_configured()
+    api = Api()
+    parser = api.settings_parser
+    try:
+        parser.set('default', 'disabled', 'true')
+        with open(api.settings_file, "w") as f:
+            parser.write(f)
+        click.echo(
+            "W&B disabled, running your script from this directory will only write metadata locally.")
+    except configparser.Error as e:
+        click.echo(
+            'Unable to write config, copy and paste the following in your terminal to turn off W&B:\nexport WANDB_MODE=dryrun')
 
 
 RUN_CONTEXT = copy.copy(CONTEXT)
@@ -736,37 +720,6 @@ def agent(sweep_id):
     # you can send local commands like so:
     # agent_api.command({'type': 'run', 'program': 'train.py',
     #                'args': ['--max_epochs=10']})
-
-
-@cli.command(context_settings=CONTEXT, help="Start a local WandB Board server")
-@click.option('--port', '-p', default=7177,
-              help='The port to start the server on')
-@click.option('--host', '-h', default="localhost",
-              help='The host to bind to')
-@click.option('--logdir', default=".",
-              help='The directory to find wandb logs')
-@display_error
-def board(port, host, logdir):
-    import webbrowser
-    import werkzeug.serving
-    path = os.path.abspath(logdir) if logdir != "." else None
-    if path and os.path.exists(path + "/wandb"):
-        path = path + "/wandb"
-    from wandb.board import create_app, data
-    app = create_app("default", path)
-    if len(data['Runs']) == 0:
-        raise ClickException(
-            "No runs found in this directory, specify a different directory with --logdir")
-    dev = os.getenv('WANDB_ENV', "").startswith("dev")
-    extra = "(dev)" if dev else ""
-    if not werkzeug.serving.is_running_from_reloader():
-        click.echo(
-            'Started wandb board on http://{0}:{1} ✨ {2}'.format(host, port, extra))
-        threading.Timer(1, webbrowser.open_new_tab,
-                        ("http://{0}:{1}".format(host, port),)).start()
-    elif dev:
-        click.echo("Reloading backend...")
-    app.run(host, port, threaded=True, debug=dev)
 
 
 if __name__ == "__main__":

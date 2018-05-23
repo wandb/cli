@@ -50,16 +50,14 @@ class Stats(object):
 
 
 class SystemStats(object):
-    SAMPLE_RATE_SECONDS = 2
-    SAMPLES_TO_AVERAGE = 15
-
-    def __init__(self, run):
+    def __init__(self, run, api):
         try:
             nvmlInit()
             self.gpu_count = nvmlDeviceGetCount()
         except NVMLError as err:
             self.gpu_count = 0
         self.run = run
+        self._api = api
         self.sampler = {}
         self.samples = 0
         self._shutdown = False
@@ -70,7 +68,19 @@ class SystemStats(object):
         }
         self._thread = threading.Thread(target=self._thread_body)
         self._thread.daemon = True
+
+    def start(self):
         self._thread.start()
+
+    @property
+    def sample_rate_seconds(self):
+        """Sample system stats every this many seconds, defaults to 2, min is 0.5"""
+        return max(0.5, self._api.dynamic_settings["system_sample_seconds"])
+
+    @property
+    def samples_to_average(self):
+        """The number of samples to average before pushing, defaults to 15 valid range (2:30)"""
+        return min(30, max(2, self._api.dynamic_settings["system_samples"]))
 
     def _thread_body(self):
         while True:
@@ -80,15 +90,19 @@ class SystemStats(object):
                     self.sampler[stat] = self.sampler.get(stat, [])
                     self.sampler[stat].append(value)
             self.samples += 1
-            if self._shutdown or self.samples >= self.SAMPLES_TO_AVERAGE:
+            if self._shutdown or self.samples >= self.samples_to_average:
                 self.flush()
                 if self._shutdown:
                     break
-            time.sleep(self.SAMPLE_RATE_SECONDS)
+            time.sleep(self.sample_rate_seconds)
 
     def shutdown(self):
         self._shutdown = True
-        self._thread.join()
+        try:
+            self._thread.join()
+        # Incase we never start it
+        except RuntimeError:
+            pass
 
     def flush(self):
         stats = self.stats()

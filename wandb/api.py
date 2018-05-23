@@ -6,7 +6,6 @@ import os
 import requests
 import ast
 from functools import wraps
-import logging
 import hashlib
 import os
 import json
@@ -61,6 +60,7 @@ class Progress(object):
 
 class CommError(Error):
     """Error communicating with W&B"""
+
     def __init__(self, msg, exc=None):
         super(CommError, self).__init__(msg)
         self.exc = exc
@@ -137,19 +137,26 @@ class Api(object):
         self.default_settings.update(default_settings or {})
         self._settings = None
         self.retries = 3
-        self._settings_parser = configparser.ConfigParser()
+        self.settings_parser = configparser.ConfigParser()
         self.tagged = False
+        self.update_available = False
         if load_settings:
             potential_settings_paths = [
                 os.path.expanduser('~/.wandb/settings')
             ]
             potential_settings_paths.append(
                 os.path.join(wandb_dir(), 'settings'))
-            files = self._settings_parser.read(potential_settings_paths)
+            files = self.settings_parser.read(potential_settings_paths)
             self.settings_file = files[0] if len(files) > 0 else "Not found"
         else:
             self.settings_file = "Not found"
         self.git = GitRepo(remote=self.settings("git_remote"))
+        # Mutable settings set by the _file_stream_api
+        self.dynamic_settings = {
+            'system_sample_seconds': 2,
+            'system_samples': 15,
+            'heartbeat_seconds': 30,
+        }
         client = Client(
             transport=RequestsHTTPTransport(
                 headers={'User-Agent': self.user_agent},
@@ -165,6 +172,12 @@ class Api(object):
                                retryable_exceptions=(RetryError, requests.RequestException))
         self._current_run_id = None
         self._file_stream_api = None
+
+    def disabled(self):
+        try:
+            return self.settings_parser.get('default', 'disabled')
+        except configparser.Error:
+            return False
 
     def save_patches(self, out_dir):
         """Save the current state of this repository to one or more patches.
@@ -239,10 +252,12 @@ class Api(object):
     @property
     def api_key(self):
         auth = requests.utils.get_netrc_auth(self.api_url)
+        key = None
         if auth:
             key = auth[-1]
-        else:
-            key = os.environ.get("WANDB_API_KEY")
+        # Environment should take precedence
+        if os.getenv("WANDB_API_KEY"):
+            key = os.environ["WANDB_API_KEY"]
         return key
 
     @property
@@ -252,7 +267,7 @@ class Api(object):
     @property
     def app_url(self):
         api_url = self.api_url
-        if api_url.endswith('.test'):
+        if api_url.endswith('.test') or self.settings().get("dev_prod"):
             return 'http://app.test'
         elif api_url.endswith('wandb.ai'):
             return 'https://app.wandb.ai'
@@ -280,9 +295,9 @@ class Api(object):
             self._settings = self.default_settings.copy()
             section = section or self._settings['section']
             try:
-                if section in self._settings_parser.sections():
-                    for option in self._settings_parser.options(section):
-                        self._settings[option] = self._settings_parser.get(
+                if section in self.settings_parser.sections():
+                    for option in self.settings_parser.options(section):
+                        self._settings[option] = self.settings_parser.get(
                             section, option)
             except configparser.InterpolationSyntaxError:
                 print("WARNING: Unable to parse settings file")
@@ -476,7 +491,7 @@ class Api(object):
         query = gql('''
         query Model($project: String!, $entity: String!, $name: String!) {
             model(name: $project, entityName: $entity) {
-                bucket(name: $name) {
+                bucket(name: $name, missingOk: true) {
                     id
                     name
                     logLineCount
@@ -489,14 +504,9 @@ class Api(object):
         }
         ''')
 
-        try:
-            response = self.gql(query, variable_values={
-                'entity': entity, 'project': project, 'name': name,
-            })
-        except Exception as e:
-            if '404' in str(e):
-                return None
-            raise
+        response = self.gql(query, variable_values={
+            'entity': entity, 'project': project, 'name': name,
+        })
         run = response['model']['bucket']
         return run
 
@@ -587,6 +597,7 @@ class Api(object):
                     description
                     config
                 }
+                updateAvailable
             }
         }
         ''')
@@ -606,8 +617,10 @@ class Api(object):
             'state': state, 'sweep': sweep_name, 'summaryMetrics': summary_metrics
         }
 
-        response = self.gql(mutation, variable_values=variable_values, **kwargs)
+        response = self.gql(
+            mutation, variable_values=variable_values, **kwargs)
 
+        self.update_available = response['upsertBucket']['updateAvailable']
         return response['upsertBucket']['bucket']
 
     @normalize_exceptions
@@ -655,7 +668,8 @@ class Api(object):
         })
 
         run = query_result['model']['bucket']
-        result = {file['name']                  : file for file in self._flatten_edges(run['files'])}
+        result = {file['name']
+            : file for file in self._flatten_edges(run['files'])}
         return run['id'], result
 
     @normalize_exceptions
@@ -968,14 +982,12 @@ class Api(object):
         return responses
 
     def get_file_stream_api(self):
+        """This creates a new file pusher thread.  Call start to initiate the thread that talks to W&B"""
         if not self._file_stream_api:
-            settings = self.settings()
             if self._current_run_id is None:
                 raise UsageError(
                     'Must have a current run to use file stream API.')
-            self._file_stream_api = FileStreamApi(
-                self.api_key, self.user_agent, settings['base_url'],
-                settings['entity'], settings['project'], self._current_run_id)
+            self._file_stream_api = FileStreamApi(self, self._current_run_id)
         return self._file_stream_api
 
     def tag_and_push(self, name, description, force=True):
@@ -1071,20 +1083,21 @@ class FileStreamApi(object):
     Finish = collections.namedtuple('Finish', ('exitcode'))
 
     HTTP_TIMEOUT = 10
-    HEARTBEAT_INTERVAL_SECONDS = 30
     MAX_ITEMS_PER_PUSH = 10000
 
-    def __init__(self, api_key, user_agent, base_url, entity, project, run_id):
+    def __init__(self, api, run_id):
+        settings = api.settings()
         self._endpoint = "{base}/{entity}/{project}/{run}/file_stream".format(
-            base=base_url,
-            entity=entity,
-            project=project,
+            base=settings['base_url'],
+            entity=settings['entity'],
+            project=settings['project'],
             run=run_id)
+        self._api = api
         self._client = requests.Session()
-        self._client.auth = ('api', api_key)
+        self._client.auth = ('api', api.api_key)
         self._client.timeout = self.HTTP_TIMEOUT
         self._client.headers.update({
-            'User-Agent': user_agent,
+            'User-Agent': api.user_agent,
         })
         self._file_policies = {}
         self._queue = queue.Queue()
@@ -1092,19 +1105,26 @@ class FileStreamApi(object):
         # It seems we need to make this a daemon thread to get sync.py's atexit handler to run, which
         # cleans this thread up.
         self._thread.daemon = True
+
+    def start(self):
         self._thread.start()
 
     def set_file_policy(self, filename, file_policy):
         self._file_policies[filename] = file_policy
 
+    @property
+    def heartbeat_seconds(self):
+        # Defaults to 30
+        return self._api.dynamic_settings["heartbeat_seconds"]
+
     def rate_limit_seconds(self):
         run_time = time.time() - wandb.START_TIME
         if run_time < 30:
-            return 2
+            return max(1, self.heartbeat_seconds / 15)
         elif run_time < 300:
-            return 10
+            return max(2.5, self.heartbeat_seconds / 3)
         else:
-            return self.HEARTBEAT_INTERVAL_SECONDS
+            return max(5, self.heartbeat_seconds)
 
     def _read_queue(self):
         # called from the push thread (_thread_body), this does an initial read
@@ -1141,13 +1161,21 @@ class FileStreamApi(object):
                 self._send(ready_chunks)
                 ready_chunks = []
 
-            if cur_time - posted_anything_time > self.HEARTBEAT_INTERVAL_SECONDS:
+            if cur_time - posted_anything_time > self.heartbeat_seconds:
                 posted_anything_time = cur_time
-                util.request_with_retry(self._client.post,
-                                        self._endpoint, json={'complete': False, 'failed': False})
+                self._handle_response(util.request_with_retry(self._client.post,
+                                                              self._endpoint, json={'complete': False, 'failed': False}))
         # post the final close message. (item is self.Finish instance now)
         util.request_with_retry(self._client.post,
                                 self._endpoint, json={'complete': True, 'exitcode': int(finished.exitcode)})
+
+    def _handle_response(self, response):
+        """Logs dropped chunks and updates dynamic settings"""
+        if isinstance(response, Exception):
+            logging.error("dropped chunk %s" % files)
+        elif response.json().get("limits"):
+            parsed = response.json()
+            self._api.dynamic_settings.update(parsed["limits"])
 
     def _send(self, chunks):
         # create files dict. dict of <filename: chunks> pairs where chunks is a list of
@@ -1163,8 +1191,8 @@ class FileStreamApi(object):
             files[filename] = self._file_policies[filename].process_chunks(
                 file_chunks)
 
-        util.request_with_retry(
-            self._client.post, self._endpoint, json={'files': files})
+        self._handle_response(util.request_with_retry(
+            self._client.post, self._endpoint, json={'files': files}))
 
     def push(self, filename, data):
         """Push a chunk of a file to the streaming endpoint.
@@ -1185,4 +1213,5 @@ class FileStreamApi(object):
             exitcode: The exitcode of the watched process.
         """
         self._queue.put(self.Finish(exitcode))
+        # TODO: This can hang for upto 30 seconds...
         self._thread.join()

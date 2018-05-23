@@ -10,7 +10,9 @@ from wandb import summary
 from wandb import meta
 from wandb import typedtable
 from wandb import util
+from wandb.api import Api
 from wandb.wandb_config import Config
+from six.moves import configparser
 import atexit
 import sys
 
@@ -86,6 +88,16 @@ class Run(object):
         resume = environment.get('WANDB_RESUME')
         storage_id = environment.get('WANDB_RUN_STORAGE_ID')
         mode = environment.get('WANDB_MODE')
+        disabled = Api().disabled()
+        if not mode and disabled:
+            mode = "dryrun"
+        elif disabled and mode != "dryrun":
+            wandb.termlog(
+                "WARNING: WANDB_MODE is set to run, but W&B was disabled.  Run `wandb on` to remove this message")
+        elif disabled:
+            wandb.termlog(
+                'W&B is disabled in this directory.  Run `wandb on` to enable cloud syncing.')
+
         run_dir = environment.get('WANDB_RUN_DIR')
         sweep_id = environment.get('WANDB_SWEEP_ID')
         program = environment.get('WANDB_PROGRAM')
@@ -96,6 +108,18 @@ class Run(object):
                   wandb_dir=wandb_dir,
                   resume=resume)
         return run
+
+    def save(self, id=None, program=None, summary_metrics=None, num_retries=None, api=None, job_type="train"):
+        api = api or Api()
+        if api.settings("project") is None:
+            raise ValueError("Project must be configured.")
+        upsert_result = api.upsert_run(id=id or self.storage_id, name=self.id, commit=api.git.last_commit,
+                                       project=api.settings("project"), entity=api.settings("entity"),
+                                       config=self.config.as_dict(), description=self.description, host=socket.gethostname(),
+                                       program_path=program or self.program, repo=api.git.remote_url, sweep_name=self.sweep_id,
+                                       summary_metrics=summary_metrics, job_type=job_type, num_retries=num_retries)
+        self.storage_id = upsert_result['id']
+        return upsert_result
 
     def set_environment(self, environment=None):
         """Set environment variables needed to reconstruct this object inside
@@ -109,6 +133,7 @@ class Run(object):
             environment['WANDB_RUN_STORAGE_ID'] = self.storage_id
         environment['WANDB_MODE'] = self.mode
         environment['WANDB_RUN_DIR'] = self.dir
+
         if self.wandb_dir:
             environment['WANDB_DIR'] = self.wandb_dir
         if self.sweep_id is not None:
@@ -119,13 +144,25 @@ class Run(object):
     def _mkdir(self):
         util.mkdir_exists_ok(self._dir)
 
-    def get_url(self, api):
+    def get_url(self, api=None):
+        api = api or Api()
         return "{base}/{entity}/{project}/runs/{run}".format(
             base=api.app_url,
             entity=api.settings('entity'),
             project=api.settings('project'),
             run=self.id
         )
+
+    def __repr__(self):
+        return "W&B Run %s" % self.get_url()
+
+    def _repr_html_(self):
+        if self.storage_id:
+            url = self.get_url() + "/edit?jupyter=true"
+            return '''<iframe src="%s" style="border:none;width:100%%;height:300px">
+            </iframe>''' % url
+        else:
+            return '''Not logged in or configured, see https://docs.wandb.com'''
 
     @property
     def host(self):
@@ -215,8 +252,10 @@ class Run(object):
         """
         if self._events is not None:
             self._events.close()
+            self._events = None
         if self._history is not None:
             self._history.close()
+            self._history = None
 
 
 def generate_id():

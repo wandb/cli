@@ -178,7 +178,7 @@ def test_upload_failure_resumable(request_mocker, upload_url):
 
 def test_settings(mocker):
     api._settings = None
-    parser = mocker.patch.object(api, "_settings_parser")
+    parser = mocker.patch.object(api, "settings_parser")
     parser.sections.return_value = ["default"]
     parser.options.return_value = ["project", "entity"]
     parser.get.side_effect = ["test_model", "test_entity"]
@@ -205,6 +205,11 @@ def test_default_settings():
     }
 
 
+def test_dynamic_settings():
+    assert wandb_api.Api({}).dynamic_settings == {
+        'heartbeat_seconds': 30, 'system_sample_seconds': 2, 'system_samples': 15}
+
+
 @pytest.mark.skip('This tries to upsert run and fails')
 def test_init(git_repo, upsert_run, request_mocker):
     upsert_run(request_mocker)
@@ -212,9 +217,4 @@ def test_init(git_repo, upsert_run, request_mocker):
     os.environ['WANDB_MODE'] = 'run'
     run = wandb.init()
     assert run.mode == "run"
-    # TODO: make a fixture?  This is gross
-    del os.environ['WANDB_MODE']
-    del os.environ['WANDB_INITED']
-    del os.environ['WANDB_RUN_STORAGE_ID']
-    del os.environ['WANDB_RUN_ID']
-    del os.environ['WANDB_RUN_DIR']
+    wandb.reset_env()
