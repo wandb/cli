@@ -10,6 +10,8 @@ import {
   truncateString,
 } from '../util/runhelpers.js';
 
+import {makeHistogram, sampleHistogram} from '../util/histogram.js';
+
 const avg = arr => arr.reduce((a, b) => a + b, 0) / arr.length;
 const arrMax = arr => arr.reduce((a, b) => Math.max(a, b));
 const arrMin = arr => arr.reduce((a, b) => Math.min(a, b));
@@ -504,6 +506,24 @@ export function aggregateLines(
   return [line, area];
 }
 
+function isHistoryArray(history, lineName) {
+  return (
+    history &&
+    history[0] &&
+    history[0][lineName] &&
+    Array.isArray(history[0][lineName])
+  );
+}
+
+function isHistoryHistogram(history, lineName) {
+  return (
+    history &&
+    history[0] &&
+    history[0][lineName] &&
+    history[0][lineName]._type == 'histogram'
+  );
+}
+
 export function linesFromDataRunPlot(
   data,
   historyKeys,
@@ -537,22 +557,26 @@ export function linesFromDataRunPlot(
   let historyLines = historyNames
     .map((lineName, i) => {
       let lineData = [];
+
       if (
-        data.history &&
-        data.history[0] &&
-        data.history[0][lineName] &&
-        Array.isArray(data.history[0][lineName])
+        isHistoryArray(data.history, lineName) ||
+        isHistoryHistogram(data.history, lineName)
       ) {
-        /* Handle the case where history is an array */
-        /* TODO: handle the case where history is a mix of arrays and scalars */
+        /* Handle the case where history is an array or histogram */
 
         let min = _.min(
           data.history.map((row, j) => {
+            if (row[lineName]._type && row[lineName]._type == 'histogram') {
+              return row[lineName].bins[0];
+            }
             return _.min(row[lineName]);
           })
         );
         let max = _.max(
           data.history.map((row, j) => {
+            if (row[lineName]._type && row[lineName]._type == 'histogram') {
+              return _.last(row[lineName].bins);
+            }
             return _.max(row[lineName]);
           })
         );
@@ -800,45 +824,3 @@ export function smartNames(names, minRunSize, replaceStr) {
 }
 
 export function runToLegendLabels(run, fields) {}
-
-export function makeHistogram(values, numBuckets = 10, min = null, max = null) {
-  /*
-   * builds a histogram of values for evenly spaced buckets from max to min.
-   * If max and min unspecified, set to max and min of values.
-   */
-
-  if (min == null) {
-    min = _.min(values);
-  }
-  if (max == null) {
-    max = _.max(values);
-  }
-
-  if (min == max) {
-    binEdges = [min, min + 1];
-    counts = [values.length];
-    return {counts: counts, binEdges: binEdges};
-  }
-
-  let binEdges = [];
-  let bucketWidth = (max - min) / numBuckets;
-
-  let counts = Array(numBuckets)
-    .fill()
-    .map(e => 0);
-
-  for (let i = 0; i < numBuckets + 1; i++) {
-    binEdges.push(min + i * bucketWidth);
-  }
-
-  values.map(v => {
-    let bucket = Math.floor((v - min) / bucketWidth);
-    if (bucket >= numBuckets) {
-      bucket = numBuckets - 1;
-    } else if (bucket < 0) {
-      bucket = 0;
-    }
-    counts[bucket]++;
-  });
-  return {counts: counts, binEdges: binEdges};
-}

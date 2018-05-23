@@ -247,6 +247,7 @@ function withDerivedRunsData(WrappedComponent) {
                 .filter(row => row !== null)
             : null,
         }));
+
         const historyKeys = _.uniq(
           _.flatMap(
             _.uniq(

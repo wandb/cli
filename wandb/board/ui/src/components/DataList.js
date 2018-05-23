@@ -2,7 +2,8 @@ import React from 'react';
 import {List, Input, Icon, Modal, Button, Grid} from 'semantic-ui-react';
 import FixedLengthString from '../components/FixedLengthString';
 import {flatten} from '../util/flatten';
-
+import {Sparklines, SparklinesLine} from 'react-sparklines';
+import {XYPlot, LineSeries, XAxis, YAxis, VerticalBarSeries} from 'react-vis';
 import {
   displayValue,
   fuzzyMatch,
@@ -60,7 +61,9 @@ class DataList extends React.Component {
           <List.Header>
             {highlighted ? key : <FixedLengthString text={key} />}
           </List.Header>
-          <List.Description>{'' + this.formatValue(value)}</List.Description>
+          <List.Description style={{width: '100px'}}>
+            {this.formatValue(value)}
+          </List.Description>
         </List.Content>
       </List.Item>
     );
@@ -71,7 +74,25 @@ class DataList extends React.Component {
   }
 
   formatValueDefault(value) {
-    return displayValue(value);
+    if (value._type && value._type === 'histogram') {
+      let data = [];
+      for (let i = 0; i < value.values.length; i++) {
+        data.push({
+          x0: value.bins[i],
+          x: value.bins[i + 1],
+          y: value.values[i],
+        });
+      }
+      console.log(data);
+
+      return (
+        <XYPlot width={100} height={20}>
+          <VerticalBarSeries data={data} />
+        </XYPlot>
+      );
+    } else {
+      return displayValue(value);
+    }
   }
 
   rawMode = e => {

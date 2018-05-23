@@ -10,8 +10,8 @@ import {
   xAxisLabel,
   xAxisChoices,
   friendlyMetricDefaults,
-  makeHistogram,
 } from '../util/plotHelpers.js';
+import {makeHistogram} from '../util/histogram.js';
 import {
   XAxis,
   YAxis,

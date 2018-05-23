@@ -71,6 +71,12 @@ export default class RunViewer extends React.Component {
   }
 
   parseData(rows, type) {
+    /**
+     * We flatten and handle NaNs in the raw history data, rows.
+     * We pull out key values and remove images from the keys.
+     */
+
+    /* LB: Do we really need to pass in variable "type" here?  Looks like it's just for debugging */
     if (!rows) {
       return [null, null];
     }
@@ -87,9 +93,14 @@ export default class RunViewer extends React.Component {
         return flatten(row, {safe: true});
       })
       .filter(row => row !== null);
+
     let keys = _.flatMap(data, row =>
-      _.keys(row).filter(key => !row[key] || !row[key]._type)
+      _.keys(row).filter(
+        /* We are basically removing images here */
+        key => !row[key] || !row[key]._type || row[key]._type === 'histogram'
+      )
     );
+
     keys = _.uniq(keys);
     keys = _.sortBy(keys);
     return [keys, data];

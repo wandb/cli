@@ -9,6 +9,7 @@ import {Icon} from 'semantic-ui-react';
 import * as Run from './runs';
 import * as Filters from './filters';
 import {Link} from 'react-router-dom';
+import {Sparklines, SparklinesBars} from 'react-sparklines';
 
 export function convertValue(string) {
   let val = Number.parseFloat(string);
@@ -28,6 +29,18 @@ export function displayValue(value) {
     }
   } else if (_.isString(value)) {
     return value;
+  } else if (value._type) {
+    if (value._type === 'histogram') {
+      return (
+        <Sparklines data={[5, 10, 5, 20]}>
+          <SparklinesBars color="blue" />
+        </Sparklines>
+      );
+    } else if (value._type === 'image') {
+      return 'Image';
+    } else {
+      return 'Unknown Type';
+    }
   } else {
     return JSON.stringify(value);
   }
