@@ -8,11 +8,13 @@ import os
 import socket
 import sys
 import time
+import traceback
 
 import wandb
 import wandb.api
 import wandb.run_manager
 import wandb.wandb_run
+from wandb import util
 
 
 def headless(args):
@@ -49,20 +51,13 @@ def agent_run(args):
 
     # TODO: better failure handling
     root = api.git.root
-    remote_url = api.git.remote_url
-    host = socket.gethostname()
     # handle non-git directories
     if not root:
         root = os.path.abspath(os.getcwd())
+        host = socket.gethostname()
         remote_url = 'file://%s%s' % (host, root)
 
-    upsert_result = api.upsert_run(id=run.storage_id,
-                                   name=run.id,
-                                   project=api.settings("project"),
-                                   entity=api.settings("entity"),
-                                   config=run.config.as_dict(), description=run.description, host=host,
-                                   program_path=args['program'], repo=remote_url, sweep_name=run.sweep_id)
-    run.storage_id = upsert_result['id']
+    run.save(program=args['program'], api=api, job_type=args['job_type'])
     env = dict(os.environ)
     run.set_environment(env)
 
@@ -78,7 +73,7 @@ def agent_run(args):
                 'Are you sure you provided the correct API key to "wandb login"?')
         lines = traceback.format_exception(
             exc_type, exc_value, exc_traceback)
-        logger.error('\n'.join(lines))
+        logging.error('\n'.join(lines))
     else:
         rm.run_user_process(args['program'], args['args'], env)
 

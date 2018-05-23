@@ -276,9 +276,8 @@ class LinePlotPanel extends React.Component {
     ) {
       return this.renderErrorChart(
         <p>
-          This run doesn't have any history data, so you can't make a history
-          line chart. For more information on how to collect history, check out
-          our documentation at{' '}
+          This run doesn't have any history data. Call <b>wandb.log</b> to add
+          metrics to this chart, learn more at{' '}
           <a href="https://docs.wandb.com/docs/logs.html">
             https://docs.wandb.com/docs/logs.html
           </a>.
@@ -290,7 +289,11 @@ class LinePlotPanel extends React.Component {
     }
 
     if (lines.every(l => l.data.length == 0)) {
-      return this.renderErrorChart(<div>This chart has no data.</div>);
+      return this.renderErrorChart(
+        <div>
+          This chart has no data, waiting for a call to <b>wandb.log</b>
+        </div>
+      );
     }
 
     return (

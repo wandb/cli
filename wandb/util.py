@@ -12,9 +12,13 @@ import sys
 import threading
 import time
 import random
+import textwrap
+import click
+import stat
 
 import wandb
 from wandb import io_wrap
+from wandb import wandb_dir
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +68,58 @@ def mkdir_exists_ok(path):
             raise
 
 
+def write_settings(entity, project, url):
+    if not os.path.isdir(wandb_dir()):
+        os.mkdir(wandb_dir())
+    with open(os.path.join(wandb_dir(), 'settings'), "w") as file:
+        print('[default]', file=file)
+        print('entity: {}'.format(entity), file=file)
+        print('project: {}'.format(project), file=file)
+        print('base_url: {}'.format(url), file=file)
+
+
+def write_netrc(host, entity, key):
+    """Add our host and key to .netrc"""
+    if len(key) != 40:
+        click.secho(
+            'API-key must be exactly 40 characters long: %s (%s chars)' % (key, len(key)))
+        return None
+    try:
+        print("Appending key to your netrc file: %s" %
+              os.path.expanduser('~/.netrc'))
+        normalized_host = host.split("/")[-1].split(":")[0]
+        machine_line = 'machine %s' % normalized_host
+        path = os.path.expanduser('~/.netrc')
+        orig_lines = None
+        try:
+            with open(path) as f:
+                orig_lines = f.read().strip().split('\n')
+        except (IOError, OSError) as e:
+            pass
+        with open(path, 'w') as f:
+            if orig_lines:
+                # delete this machine from the file if it's already there.
+                skip = 0
+                for line in orig_lines:
+                    if machine_line in line:
+                        skip = 2
+                    elif skip:
+                        skip -= 1
+                    else:
+                        f.write('%s\n' % line)
+            f.write(textwrap.dedent("""\
+            machine {host}
+              login {entity}
+              password {key}
+            """).format(host=normalized_host, entity=entity, key=key))
+        os.chmod(os.path.expanduser('~/.netrc'),
+                 stat.S_IRUSR | stat.S_IWUSR)
+        return True
+    except IOError as e:
+        click.secho("Unable to read ~/.netrc", fg="red")
+        return None
+
+
 def request_with_retry(func, *args, **kwargs):
     """Perform a requests http call, retrying with exponential backoff.
 
@@ -84,12 +140,17 @@ def request_with_retry(func, *args, **kwargs):
         except (requests.exceptions.ConnectionError,
                 requests.exceptions.HTTPError,  # XXX 500s aren't retryable
                 requests.exceptions.Timeout) as e:
-            logger.warning('requests_with_retry encountered retryable exception: %s. args: %s, kwargs: %s',
-                           e, args, kwargs)
             if retry_count == max_retries:
                 return e
             retry_count += 1
-            time.sleep(sleep + random.random() * 0.25 * sleep)
+            delay = sleep + random.random() * 0.25 * sleep
+            if isinstance(e, requests.exceptions.HTTPError) and e.response.status_code == 429:
+                logger.info(
+                    "Rate limit exceeded, retrying in %s seconds" % delay)
+            else:
+                logger.warning('requests_with_retry encountered retryable exception: %s. args: %s, kwargs: %s',
+                               e, args, kwargs)
+            time.sleep(delay)
             sleep *= 2
             if sleep > MAX_SLEEP_SECONDS:
                 sleep = MAX_SLEEP_SECONDS
