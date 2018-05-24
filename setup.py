@@ -30,7 +30,7 @@ test_requirements = [
 ]
 
 setup(
-    name='wandb',
+    name='wandb-testing',
     version='0.6.1r1',
     description="A CLI and library for interacting with the Weights and Biases API.",
     long_description=readme,
