@@ -92,7 +92,7 @@ class Api(object):
                 # https://bugs.python.org/issue22889
                 timeout=self.HTTP_TIMEOUT,
                 auth=("api", self.api_key),
-                url='%s/graphql' % self.settings('base_url')
+                url='%s/gorilla' % self.settings('base_url')
             )
         )
         self.gql = retry.Retry(self.client.execute, retry_timedelta=retry_timedelta,
