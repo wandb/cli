@@ -99,7 +99,7 @@ def watch(models, criterion=None, log="gradients"):
     """
     if run is None:
         raise ValueError(
-            "You must call `wandb.init` before calling hook_torch")
+            "You must call `wandb.init` before calling watch")
     log_parameters = False
     log_gradients = True
     if log == "all":
@@ -113,18 +113,29 @@ def watch(models, criterion=None, log="gradients"):
     if not isinstance(models, (tuple, list)):
         models = (models,)
     graphs = []
-    prefix = ''
+    prefix = 'graph'
     for i, model in enumerate(models):
-        if i > 0:
+        if len(models) > 1:
             prefix = "graph_%i" % i
+            graph_name = prefix
+        else:
+            prefix = ""
+            graph_name = "graph" 
 
         run.history.torch.add_log_hooks_to_pytorch_module(
             model, log_parameters=log_parameters, log_gradients=log_gradients, prefix=prefix)
 
         graph = wandb_torch.TorchGraph.hook_torch(model, criterion)
+        
         graphs.append(graph)
         # We access the raw summary because we don't want transform called until after the forward pass
-        run.summary._summary["graph_%i" % i] = graph
+        run.summary._summary[graph_name] = graph.module_graph
+        
+        #Uncomment when this is handled better in the front end
+        #run.summary._summary[graph_name+"_forward"] = graph.forward_graph
+        #run.summary._summary[graph_name+"_backward"] = graph.backward_graph
+
+
     run._user_accessed_summary = False
     return graphs
 

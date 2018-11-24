@@ -100,6 +100,19 @@ class Graph(object):
         return node
 
     def add_edge(self, from_node, to_node):
+        if not isinstance(from_node, Node):
+            if from_node in self.nodes_by_id:
+                from_node = self.nodes_by_id[from_node]
+            else:
+                print(self.nodes_by_id)
+                raise ValueError("Node either needs to be class Node or an id of a node in the graph")
+
+        if not isinstance(to_node, Node):
+            if to_node in self.nodes_by_id:
+                to_node = self.nodes_by_id[to_node]
+            else:
+                raise ValueError("Node either needs to be class Node or an id of a node in the graph")
+
         edge = Edge(from_node, to_node)
         self.edges.append(edge)
 

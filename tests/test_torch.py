@@ -165,11 +165,12 @@ class Sequence(nn.Module):
 
 def test_gradient_logging(wandb_init_run):
     net = ConvNet()
-    wandb.hook_torch(net)
+    wandb.watch(net)
     for i in range(3):
         output = net(dummy_torch_tensor((64, 1, 28, 28)))
         grads = torch.ones(64, 10)
         output.backward(grads)
+        print(wandb_init_run.history.row)
         assert(len(wandb_init_run.history.row) == 8)
         assert(wandb_init_run.history.row['gradients/fc2.bias'].histogram[0] > 0)
         wandb.log({"a": 2})
@@ -177,7 +178,7 @@ def test_gradient_logging(wandb_init_run):
 
 def test_all_logging(wandb_init_run):
     net = ConvNet()
-    wandb.hook_torch(net, log="all")
+    wandb.watch(net, log="all")
     for i in range(3):
         output = net(dummy_torch_tensor((64, 1, 28, 28)))
         grads = torch.ones(64, 10)
@@ -191,7 +192,7 @@ def test_all_logging(wandb_init_run):
 
 def test_parameter_logging(wandb_init_run):
     net = ConvNet()
-    wandb.hook_torch(net, log="parameters")
+    wandb.watch(net, log="parameters")
     for i in range(3):
         output = net(dummy_torch_tensor((64, 1, 28, 28)))
         grads = torch.ones(64, 10)
@@ -204,13 +205,35 @@ def test_parameter_logging(wandb_init_run):
 def test_simple_net():
     net = ConvNet()
     graph = wandb.wandb_torch.TorchGraph.hook_torch(net)
-    output = net.forward(dummy_torch_tensor((64, 1, 28, 28)))
+    output = net(dummy_torch_tensor((64, 1, 28, 28)))
     grads = torch.ones(64, 10)
     output.backward(grads)
-    graph = wandb.Graph.transform(graph)
+    graph = wandb.Graph.transform(graph.module_graph)
+
     assert len(graph["nodes"]) == 5
     assert graph["nodes"][0]['class_name'] == "Conv2d(1, 10, kernel_size=(5, 5), stride=(1, 1))"
     assert graph["nodes"][0]['name'] == "conv1"
+
+def test_simple_backwards_compute_graph():
+    net = ConvNet()
+    graph = wandb.wandb_torch.TorchGraph.hook_torch(net)
+    output = netdummy_torch_tensor((64, 1, 28, 28)))
+    grads = torch.ones(64, 10)
+    output.backward(grads)
+    graph.save_backward_graph(output)
+    backwards_graph = wandb.Graph.transform(graph.backward_graph)
+    assert len(backwards_graph["edges"]) == 25
+
+def test_log_graph_on_next_backwards_pass():
+    net = ConvNet()
+    graph = wandb.wandb_torch.TorchGraph.hook_torch(net)
+    graph.log_graph_on_next_backwards_pass()
+    output = net(dummy_torch_tensor((64, 1, 28, 28)))
+    grads = torch.ones(64, 10)
+    output.backward(grads)
+    backwards_graph = wandb.Graph.transform(graph.backward_graph)
+    assert len(backwards_graph["edges"]) == 25
+
 
 def test_sequence_net():
     net = Sequence()
@@ -218,7 +241,7 @@ def test_sequence_net():
     output = net.forward(dummy_torch_tensor(
         (97, 999)))
     output.backward(torch.zeros((97, 999)))
-    graph = wandb.Graph.transform(graph)
+    graph = wandb.Graph.transform(graph.modules)
     pprint(graph)
     assert len(graph["nodes"]) == 3
     assert len(graph["nodes"][0]['parameters']) == 4
@@ -228,21 +251,21 @@ def test_sequence_net():
 def test_multi_net(wandb_init_run):
     net = ConvNet()
     graphs = wandb.hook_torch((net, net))
-    output = net.forward(dummy_torch_tensor((64, 1, 28, 28)))
+    output = net(dummy_torch_tensor((64, 1, 28, 28)))
     grads = torch.ones(64, 10)
     output.backward(grads)
-    graph1 = wandb.Graph.transform(graphs[0])
-    graph2 = wandb.Graph.transform(graphs[1])
+    graph1 = wandb.Graph.transform(graphs[0].modules)
+    graph2 = wandb.Graph.transform(graphs[1].modules)
     assert len(graph1["nodes"]) == 5
     assert len(graph2["nodes"]) == 5
 
 def test_alex_net():
     alex = models.AlexNet()
     graph = wandb.wandb_torch.TorchGraph.hook_torch(alex)
-    output = alex.forward(dummy_torch_tensor((2, 3, 224, 224)))
+    output = alex(dummy_torch_tensor((2, 3, 224, 224)))
     grads = torch.ones(2, 1000)
     output.backward(grads)
-    graph = wandb.Graph.transform(graph)
+    graph = wandb.Graph.transform(graph.modules)
     assert len(graph["nodes"]) == 20
     assert graph["nodes"][0]['class_name'] == "Conv2d(3, 64, kernel_size=(11, 11), stride=(4, 4), padding=(2, 2))"
     assert graph["nodes"][0]['name'] == "features.0"
@@ -256,9 +279,9 @@ def test_lstm(wandb_init_run):
 
     hidden = net.init_hidden()
     input_data = torch.ones((100)).type(torch.LongTensor)
-    output = net.forward(input_data, hidden)
+    output = net(input_data, hidden)
     grads = torch.ones(2, 1000)
-    graph = wandb.Graph.transform(graph)
+    graph = wandb.Graph.transform(graph.modules)
     
     assert len(graph["nodes"]) == 3
     assert graph["nodes"][2]['output_shape'] == [[1,2]]
@@ -266,21 +289,21 @@ def test_lstm(wandb_init_run):
 def test_resnet18():
     resnet = models.resnet18()
     graph = wandb.wandb_torch.TorchGraph.hook_torch(resnet)
-    output = resnet.forward(dummy_torch_tensor((2, 3, 224, 224)))
+    output = resnet(dummy_torch_tensor((2, 3, 224, 224)))
 
     grads = torch.ones(2, 1000)
     output.backward(grads)
-    graph = wandb.Graph.transform(graph)
+    graph = wandb.Graph.transform(graph.modules)
     assert graph["nodes"][0]['class_name'] == "Conv2d(3, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)"
 
 def test_subnet():
     subnet = SubNet("boxes")
     graph = wandb.wandb_torch.TorchGraph.hook_torch(subnet)
-    output = subnet.forward(dummy_torch_tensor((256, 256, 3, 3)))
+    output = subnet(dummy_torch_tensor((256, 256, 3, 3)))
 
     grads = torch.ones(256, 81, 4)
     output.backward(grads)
-    graph = wandb.Graph.transform(graph)
+    graph = wandb.Graph.transform(graph.modules)
     assert graph["nodes"][0]['class_name'] == "Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))"
 
 

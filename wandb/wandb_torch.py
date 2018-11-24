@@ -11,7 +11,7 @@ from operator import mul
 
 
 from wandb import util
-from wandb.data_types import Node, Edge
+from wandb.data_types import Node, Edge, Graph
 import wandb
 
 torch = None
@@ -41,6 +41,21 @@ def nested_shape(array_or_tuple):
         # LB: Maybe we should throw an error?
         return []
 
+def has_submodules( module):
+    global torch
+    if torch is None:
+        torch = wandb.util.get_module("torch", "Could not import torch")
+    # Trying to support torch >0.3 making this code complicated
+    # We want a list of types that we should recurse into
+    # Torch 0.3   uses containers
+    #       0.4   has ModuleList
+    #       0.4.1 has ModuleDict
+    module_types = [getattr(torch.nn, module_classname)
+        for module_classname in ("Container", "Sequential", "ModuleList", "ModuleDict")
+        if hasattr(torch.nn, module_classname)]
+        
+    return isinstance(module, tuple(module_types))
+
 class TorchHistory(object):
     """History methods specific to PyTorch
     """
@@ -56,6 +71,9 @@ class TorchHistory(object):
         log_parameters - log parameters after a forward pass
         log_gradients - log gradients after a backward pass
         """
+        if prefix != '':
+            prefix += "/"
+
         if name is not None:
             prefix = prefix + name
 
@@ -76,13 +94,6 @@ class TorchHistory(object):
             for name, parameter in module.named_parameters():
                 self._hook_variable_gradient_stats(
                     parameter, 'gradients/' + prefix + name)
-
-
-    def log_module_stats(self, module, name):
-        self._hook_module_input_output_stats(module, name)
-        self._hook_module_input_output_gradient_stats(module, name)
-        for child_name, child in module.named_children():
-            self.log_module_stats(child, name + '.' + child_name)
 
     def log_tensor_stats(self, tensor, name):
         """Add distribution statistics on a tensor's elements to the current History entry
@@ -133,9 +144,7 @@ class TorchHistory(object):
                 'A hook has already been set under name "{}"'.format(name))
 
         def _callback(grad):
-            #_callback()
             self.log_tensor_stats(grad.data, name)
-            # self.unhook(name)
 
         handle = var.register_hook(_callback)
         self._hook_handles[name] = handle
@@ -153,20 +162,96 @@ class TorchHistory(object):
         else:
             return handle.id in d
 
-class TorchGraph(wandb.data_types.Graph):
+class TorchGraph():
        
     def __init__(self):
-        super(TorchGraph, self).__init__("torch") 
+        self.module_graph = Graph('torch')
+        self.forward_graph = Graph('torch')
+        self.backward_graph = Graph('torch')
 
     @classmethod
     def hook_torch(cls, model, criterion=None):
         graph = TorchGraph()
         graph.hook_torch_modules(model, criterion)
+        graph.model = model
         return graph
 
+    def save_forward_graph_from_jit_trace(self, input_data):
+        # modifid from https://github.com/szagoruyko/pytorchviz/blob/master/torchviz/dot.py
+        # won't work with pytorch <1.0
+
+        trace, _ = torch.jit.get_trace_graph(self.model, args=(input_data,))
+        if LooseVersion(torch.__version__) >= LooseVersion("0.4.1"):
+            torch.onnx._optimize_trace(trace, torch._C._onnx.OperatorExportTypes.ONNX_ATEN_FALLBACK)
+        elif LooseVersion(torch.__version__) >= LooseVersion("0.4"):
+            torch.onnx._optimize_trace(trace, False)
+        else:
+            torch.onnx._optimize_trace(trace)
+        graph = trace.graph()
+        list_of_nodes = parse(graph)
+        
+        for node in list_of_nodes:
+            self.forward_graph.add_node(node.name)
+            if node.inputs:
+                for inp in node.inputs:
+                    self.forward_graph.add_edge(inp.name, node.name)
+
+    def log_graph_on_next_backwards_pass(self):
+        print(self.model)
+        def after_backward_hook(module, input, output):
+            self.save_backward_graph(output)
+            handle.remove()
+
+        handle = self.model.register_backward_hook(after_backward_hook)
+        
+    def save_backward_graph(self, var):
+        print("Saving graph", var)
+        seen = set()
+
+        def size_to_str(size):
+            return '(' + (', ').join(['%d' % v for v in size]) + ')'
+
+        output_nodes = (var.grad_fn,) if not isinstance(var, tuple) else tuple(v.grad_fn for v in var)
+
+        def add_nodes(var):
+            if var not in seen:
+                print("Here")
+                if torch.is_tensor(var):
+                    # note: this used to show .saved_tensors in pytorch0.2, but stopped
+                    # working as it was moved to ATen and Variable-Tensor merged
+                    self.backward_graph.add_node(str(id(var)))
+                elif hasattr(var, 'variable'):
+                    u = var.variable
+                    node_name = '%s' % size_to_str(u.size())
+                    self.backward_graph.add_node(id=str(id(var)), name=node_name)
+
+                elif var in output_nodes:
+                    self.backward_graph.add_node(id=str(id(var)), name=str(type(var).__name__))
+                else:
+                    self.backward_graph.add_node(id=str(id(var)), name=str(type(var).__name__))
+
+                seen.add(var)
+                if hasattr(var, 'next_functions'):
+                    for u in var.next_functions:
+                        if u[0] is not None:
+                            add_nodes(u[0])
+                            self.backward_graph.add_edge(str(id(u[0])), str(id(var)))
+                if hasattr(var, 'saved_tensors'):
+                    for t in var.saved_tensors:
+                        add_nodes(t)
+                        self.backward_graph.add_edge(str(id(t)), str(id(var)))
+
+        # handle multiple outputs
+        if isinstance(var, tuple):
+            for v in var:
+                add_nodes(v.grad_fn)
+        else:
+            add_nodes(var.grad_fn)
 
     def create_forward_hook(self, name, modules):
-        graph = self
+        """Adds module nodes to the graph"""
+
+        graph = self.module_graph
 
         def after_forward_hook(module, input, output):
             if id(module) in modules:
@@ -195,6 +280,10 @@ class TorchGraph(wandb.data_types.Graph):
         return after_forward_hook
 
     def hook_torch_modules(self, module, criterion=None, prefix=None):
+        """Builds up a graph of the modules torch is using and add a forward hook
+        that saves as nodes all of the modules called.
+        """
+
         torch = util.get_module("torch", "Could not import torch")
         hooks = []
         modules = set()
@@ -213,171 +302,8 @@ class TorchGraph(wandb.data_types.Graph):
                 # TODO: Why does this happen?
                 break
 
-            # Trying to support torch >0.3 making this code complicated
-            # We want a list of types that we should recurse into
-            # Torch 0.3   uses containers
-            #       0.4   has ModuleList
-            #       0.4.1 has ModuleDict
-            module_types = [getattr(torch.nn, module_classname)
-                for module_classname in ("Container", "Sequential", "ModuleList", "ModuleDict")
-                if hasattr(torch.nn, module_classname)]
-                   
-            if isinstance(sub_module, tuple(module_types)):
+            if has_submodules(sub_module):
                 self.hook_torch_modules(sub_module, prefix=name)
             else:
-                def backward_hook(module, input, output):
-                    [hook.remove() for hook in hooks]
-                    graph.loaded = True
-                    # TODO: Keeping this here as a starting point for adding graph data
-                    if not graph.loaded:
-                        def traverse(node, functions=[]):
-                            if hasattr(node, 'grad_fn'):
-                                node = node.grad_fn
-
-                            if hasattr(node, 'variable'):
-                                node = graph.nodes_by_id.get(id(node.variable))
-                                if node:
-                                    node.functions = list(functions)
-                                    del functions[:]
-
-                            if hasattr(node, 'next_functions'):
-                                functions.append(type(node).__name__)
-                                for f in node.next_functions:
-                                    if f[0]:
-                                        functions.append(type(f[0]).__name__)
-                                        traverse(f[0], functions)
-
-                            if hasattr(node, 'saved_tensors'):
-                                for t in node.saved_tensors:
-                                    traverse(t)
-                        traverse(graph.criterion)
-
                 hooks.append(
                     sub_module.register_forward_hook(self.create_forward_hook(name, modules)))
-                hooks.append(
-                    sub_module.register_backward_hook(backward_hook))
-
-    @classmethod
-    def from_torch_layers(cls, module_graph, variable):
-        """Recover something like neural net layers from PyTorch Module's and the
-        compute graph from a Variable.
-
-        Example output for a multi-layer RNN. We confusingly assign shared embedding values
-        to the encoder, but ordered next to the decoder.
-
-        rnns.0.linear.module.weight_raw rnns.0
-        rnns.0.linear.module.bias rnns.0
-        rnns.1.linear.module.weight_raw rnns.1
-        rnns.1.linear.module.bias rnns.1
-        rnns.2.linear.module.weight_raw rnns.2
-        rnns.2.linear.module.bias rnns.2
-        rnns.3.linear.module.weight_raw rnns.3
-        rnns.3.linear.module.bias rnns.3
-        decoder.weight encoder
-        decoder.bias decoder
-        """
-        # TODO: We're currently not using this, but I left it here incase we want to resurrect! - CVP
-        torch = util.get_module("torch", "Could not import torch")
-
-        module_nodes_by_hash = {id(n): n for n in module_graph.nodes}
-        module_parameter_nodes = [
-            n for n in module_graph.nodes if isinstance(n.obj, torch.nn.Parameter)]
-
-        names_by_pid = {id(n.obj): n.name for n in module_parameter_nodes}
-
-        reachable_param_nodes = module_graph[0].reachable_descendents()
-        reachable_params = {}
-        module_reachable_params = {}
-        names = {}
-        for pid, reachable_nodes in reachable_param_nodes.items():
-            node = module_nodes_by_hash[pid]
-            if not isinstance(node.obj, torch.nn.Module):
-                continue
-            module = node.obj
-            reachable_params = {}  # by object id
-            module_reachable_params[id(module)] = reachable_params
-            names[node.name] = set()
-            for reachable_hash in reachable_nodes:
-                reachable = module_nodes_by_hash[reachable_hash]
-                if isinstance(reachable.obj, torch.nn.Parameter):
-                    param = reachable.obj
-                    reachable_params[id(param)] = param
-                    names[node.name].add(names_by_pid[id(param)])
-
-        # we look for correspondences between sets of parameters used in subtrees of the
-        # computation graph and sets of parameters contained in subtrees of the module
-        # graph
-        node_depths = {id(n): d for n, d in module_graph[0].descendent_bfs()}
-        parameter_module_names = {}
-        parameter_modules = {}
-        for param_node in (n for n in module_graph.nodes if isinstance(n.obj, torch.nn.Parameter)):
-            pid = id(param_node.obj)
-            best_node = None
-            best_depth = None
-            best_reachable_params = None
-            for node in module_graph.nodes:
-                if not isinstance(node.obj, torch.nn.Module):
-                    continue
-                module = node.obj
-                reachable_params = module_reachable_params[id(module)]
-                if pid in reachable_params:
-                    depth = node_depths[id(node)]
-                    if best_node is None or (len(reachable_params), depth) <= (len(best_reachable_params), best_depth):
-                        best_node = node
-                        best_depth = depth
-                        best_reachable_params = reachable_params
-
-            parameter_modules[pid] = best_node
-            parameter_module_names[param_node.name] = best_node.name
-
-        # contains all parameters but only a minimal set of modules necessary
-        # to contain them (and which ideally correspond to conceptual layers)
-        reduced_module_graph = cls()
-        rmg_ids = itertools.count()
-        rmg_root = Node(id=next(rmg_ids), node=module_graph[0])
-        reduced_module_graph.add_node(rmg_root)
-        reduced_module_graph.root = rmg_root
-        rmg_nodes_by_pid = {}
-
-        module_nodes_by_pid = {id(n.obj): n for n in module_graph.nodes}
-
-        compute_graph, compute_node_vars = cls.from_torch_compute_graph(
-            variable)
-        for node, _ in reversed(list(compute_graph[0].ancestor_bfs())):
-            param = compute_node_vars.get(node.id)
-            pid = id(param)
-            if not isinstance(param, torch.nn.Parameter):
-                continue
-            if pid not in module_nodes_by_pid:
-                # not all Parameters that occur in the compute graph come from the Module graph
-                continue
-
-            # add the nodes in the order we want to display them on the frontend
-            mid = id(parameter_modules[pid].obj)
-            if mid in rmg_nodes_by_pid:
-                rmg_module = rmg_nodes_by_pid[mid]
-            else:
-                rmg_module = rmg_nodes_by_pid[mid] = Node(
-                    id=next(rmg_ids), node=module_nodes_by_pid[mid])
-                reduced_module_graph.add_node(rmg_module)
-                reduced_module_graph.add_edge(rmg_root, rmg_module)
-
-            rmg_param = Node(id=next(rmg_ids), node=module_nodes_by_pid[pid])
-            rmg_nodes_by_pid[pid] = rmg_param
-            reduced_module_graph.add_node(rmg_param)
-
-            reduced_module_graph.add_edge(rmg_module, rmg_param)
-        return reduced_module_graph
-
-    @classmethod
-    def node_from_module(cls, nid, module):
-        numpy = util.get_module("numpy", "Could not import numpy")
-
-        node = wandb.Node()
-        node.id = nid
-        node.child_parameters = 0
-        for parameter in module.parameters():
-            node.child_parameters += numpy.prod(parameter.size())
-        node.class_name = type(module).__name__
-
-        return node
