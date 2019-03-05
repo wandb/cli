@@ -25,10 +25,10 @@ var/
 .installed.cfg
 *.egg
 
-# Board
-wandb/board/ui/node_modules
-!wandb/board/ui/build/
-wandb/board/ui/coverage
+# Plugin Dev
+wandb/dev/node_modules
+!wandb/dev/build/
+wandb/dev/coverage
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
