@@ -755,7 +755,7 @@ def docker_run(ctx, docker_run_args, help):
 @click.option('--dir', default="/app", help="Which directory to mount the code in the container")
 @click.option('--no-dir', is_flag=True, help="Don't mount the current directory")
 @click.option('--shell', default="/bin/bash", help="The shell to start the container with")
-@click.option('--port', default="8888", help="The hot port to bind jupyter on")
+@click.option('--port', default="8888", help="The host port to bind jupyter on")
 @click.option('--cmd', help="The command to run in the container")
 @click.option('--no-tty', is_flag=True, default=False, help="Run the command without a tty")
 @display_error
@@ -837,6 +837,25 @@ def docker(ctx, docker_run_args, docker_image, nvidia, digest, jupyter, dir, no_
         command.extend(['-it', image, shell])
         wandb.termlog("Launching docker container \U0001F6A2")
     subprocess.call(command)
+
+
+@cli.command(context_settings=RUN_CONTEXT, help="Start developing plugins or reports locally")
+@click.option('--port', default="3000", help="The port to start the dev server on")
+@click.option('--dev', default=False, is_flag=True, help="The port to start the dev server on")
+@click.pass_context
+def dev(ctx, port, dev):
+    if not os.path.exists("wandb"):
+        raise ClickException("wandb dev can only be run from a directory with runs")
+    util.mkdir_exists_ok("wandb/plugins")
+    util.mkdir_exists_ok("wandb/reports")
+    report_dir = os.getcwd()+"/wandb/reports:/app/src/reports"
+    plugin_dir = os.getcwd()+"/wandb/plugins:/app/src/plugins"
+    cmd =["docker", "run", "-it", "-p", port+":3000", "-p", "35729:35729"]
+    if dev:
+        cmd += ["-v", os.path.dirname(os.path.realpath(__file__))+"/dev:/app"]
+    cmd += ["-v", plugin_dir, "-v", report_dir, "wandb:dev"]
+    print(cmd)
+    subprocess.call(cmd)
 
 
 @cli.command(context_settings=CONTEXT, help="Create a sweep")
