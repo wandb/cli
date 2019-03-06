@@ -2,27 +2,17 @@ import path from "path";
 import minimatch from "minimatch";
 import React, { lazy, Component, Suspense } from "react";
 import { Route } from "react-router-dom";
-import { importMDX } from "mdx.macro";
 export const getComponents = req =>
   req
     .keys()
     .filter(minimatch.filter("!node_modules"))
     .filter(key => !/^_/.test(path.basename(key)))
-    .map(key => {
-      let mod;
-      console.log("K", key, typeof key);
-      if (key.match(/\.(md|mdx)/)) {
-        mod = lazy(() => importMDX("rad"));
-      } else {
-        mod = req(key);
-      }
-      return {
-        key,
-        name: path.basename(key, path.extname(key)),
-        module: mod,
-        Component: mod.default || mod
-      };
-    })
+    .map(key => ({
+      key,
+      name: path.basename(key, path.extname(key)),
+      module: req(key),
+      Component: req(key).default || req(key)
+    }))
     .map(component => {
       console.log("Comps", component);
       return component;

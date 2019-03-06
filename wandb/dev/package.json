@@ -1,39 +1,53 @@
 {
-  "name": "dev",
-  "version": "0.1.0",
-  "private": true,
-  "dependencies": {
-    "mdx.macro": "^0.2.8",
-    "minimatch": "^3.0.4",
-    "postmate": "^1.5.0",
-    "react": "^16.8.3",
-    "react-dom": "^16.8.3",
-    "react-router-dom": "^4.3.1",
-    "react-scripts": "2.1.5"
-  },
-  "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
-    "eject": "react-scripts eject",
-    "storybook": "start-storybook -p 9009 -s public",
-    "build-storybook": "build-storybook -s public"
-  },
-  "eslintConfig": {
-    "extends": "react-app"
-  },
-  "browserslist": [
-    ">0.2%",
-    "not dead",
-    "not ie <= 11",
-    "not op_mini all"
-  ],
-  "devDependencies": {
-    "@babel/core": "^7.3.4",
-    "@storybook/addon-actions": "^4.1.13",
-    "@storybook/addon-links": "^4.1.13",
-    "@storybook/addons": "^4.1.13",
-    "@storybook/react": "^4.1.13",
-    "babel-loader": "^8.0.5"
-  }
+    "name": "dev",
+    "version": "0.1.0",
+    "private": true,
+    "dependencies": {
+        "@nivo/bar": "^0.52.1",
+        "@nivo/bullet": "^0.52.1",
+        "@nivo/chord": "^0.52.1",
+        "@nivo/circle-packing": "^0.52.1",
+        "@nivo/heatmap": "^0.52.1",
+        "@nivo/line": "^0.52.1",
+        "@nivo/parallel-coordinates": "^0.52.1",
+        "@nivo/pie": "^0.52.1",
+        "@nivo/scatterplot": "^0.52.1",
+        "customize-cra": "^0.2.12",
+        "mdx-loader": "^2.2.1",
+        "minimatch": "^3.0.4",
+        "postmate": "^1.5.0",
+        "react": "^16.8.3",
+        "react-dom": "^16.8.3",
+        "react-katex": "^2.0.2",
+        "react-router-dom": "^4.3.1",
+        "react-scope-provider": "^1.0.0-1",
+        "react-scripts": "2.1.5",
+        "semantic-ui-react": "^0.85.0"
+    },
+    "scripts": {
+        "start": "react-app-rewired start",
+        "build": "react-app-rewired build",
+        "test": "react-app-rewired test",
+        "eject": "react-scripts eject",
+        "storybook": "start-storybook -p 9009 -s public",
+        "build-storybook": "build-storybook -s public"
+    },
+    "eslintConfig": {
+        "extends": "react-app"
+    },
+    "browserslist": [
+        ">0.2%",
+        "not dead",
+        "not ie <= 11",
+        "not op_mini all"
+    ],
+    "devDependencies": {
+        "@babel/core": "^7.3.4",
+        "@storybook/addon-actions": "^4.1.13",
+        "@storybook/addon-links": "^4.1.13",
+        "@storybook/addons": "^4.1.13",
+        "@storybook/react": "^4.1.13",
+        "babel-loader": "^8.0.4",
+        "react-app-rewired": "^2.1.0"
+    }
 }

@@ -1,5 +1,4 @@
 import React, { lazy, Component, Suspense } from "react";
-import { importMDX } from "mdx.macro";
 import Postmate from "postmate";
 import Plugins from "./Plugins";
 import Reports from "./Reports";
