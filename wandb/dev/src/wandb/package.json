@@ -1,0 +1,8 @@
+{
+    "name": "wandb",
+    "description": "Custom components for wandb",
+    "version": "0.0.1",
+    "devDependencies": {
+      "mocha": "*"
+    }
+  }

@@ -848,12 +848,11 @@ def dev(ctx, port, dev):
         raise ClickException("wandb dev can only be run from a directory with runs")
     util.mkdir_exists_ok("wandb/plugins")
     util.mkdir_exists_ok("wandb/reports")
-    report_dir = os.getcwd()+"/wandb/reports:/app/src/reports"
-    plugin_dir = os.getcwd()+"/wandb/plugins:/app/src/plugins"
+    wandb_dir = os.getcwd()+"/wandb:/app/src/wandb"
     cmd =["docker", "run", "-it", "-p", port+":3000", "-p", "35729:35729"]
     if dev:
         cmd += ["-v", os.path.dirname(os.path.realpath(__file__))+"/dev:/app"]
-    cmd += ["-v", plugin_dir, "-v", report_dir, "wandb:dev"]
+    cmd += ["-v", wandb_dir, "wandb:dev"]
     print(cmd)
     subprocess.call(cmd)
 

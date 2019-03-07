@@ -1,4 +1,5 @@
-const { getBabelLoader } = require("customize-cra");
+const { getBabelLoader, addWebpackAlias } = require("customize-cra");
+const path = require("path");
 module.exports = (config, env) => {
   const babelLoader = getBabelLoader(config);
   config.module.rules.map(rule => {
@@ -17,5 +18,9 @@ module.exports = (config, env) => {
     });
     return rule;
   });
+  addWebpackAlias({
+    wandb: path.resolve(__dirname)
+  });
+
   return config;
 };

@@ -459,6 +459,16 @@ class IterableMedia(object):
     pass
 
 
+class Plugin(IterableMedia):
+    def __init__(self, name, data={}):
+        self.name = name
+        self.data = data
+
+    @staticmethod
+    def transform(plugin_list):
+        return {"_type": "plugin:"+plugin_list[0].name, "data": [p.data for p in plugin_list]}
+
+
 class Audio(IterableMedia):
     MAX_AUDIO_COUNT = 100
 

@@ -12,6 +12,7 @@
         "@nivo/parallel-coordinates": "^0.52.1",
         "@nivo/pie": "^0.52.1",
         "@nivo/scatterplot": "^0.52.1",
+        "@observablehq/notebook-runtime": "^2.0.0",
         "customize-cra": "^0.2.12",
         "mdx-loader": "^2.2.1",
         "minimatch": "^3.0.4",
@@ -22,7 +23,8 @@
         "react-router-dom": "^4.3.1",
         "react-scope-provider": "^1.0.0-1",
         "react-scripts": "2.1.5",
-        "semantic-ui-react": "^0.85.0"
+        "semantic-ui-react": "^0.85.0",
+        "wandb": "file:src/wandb"
     },
     "scripts": {
         "start": "react-app-rewired start",

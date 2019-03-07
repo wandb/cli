@@ -1,4 +1,5 @@
 import React from "react";
+import { Redirect, Switch } from "react-router-dom";
 import { RouteWithSubRoutes } from "./util";
 
 export default class Plugins extends React.Component {
@@ -12,14 +13,26 @@ export default class Plugins extends React.Component {
     );
     this.props.reload();
   };
+  switch = React.createRef();
   render() {
     return (
       <React.Fragment>
-        <div>
-          {this.props.routes.map((route, i) => (
-            <RouteWithSubRoutes key={i} {...route} />
-          ))}
-        </div>
+        <Switch ref={this.switch}>
+          {this.props.routes.length > 0 && (
+            <Redirect exact from="/plugins" to={this.props.routes[0].path} />
+          )}
+          {this.props.routes.map((route, i) => {
+            return (
+              <RouteWithSubRoutes
+                key={i}
+                setQuery={this.props.setQuery}
+                data={this.props.data}
+                runHistoryKeyInfo={this.props.runHistoryKeyInfo}
+                {...route}
+              />
+            );
+          })}
+        </Switch>
       </React.Fragment>
     );
   }
