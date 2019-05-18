@@ -511,6 +511,7 @@ class Api(object):
                 bucket(name: $name, missingOk: true) {
                     id
                     name
+                    config
                     summaryMetrics
                     displayName
                     logLineCount

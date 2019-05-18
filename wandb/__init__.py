@@ -243,9 +243,8 @@ def _init_headless(run, cloud=True):
             termerror('Failed to kill wandb process, PID {}'.format(
                 wandb_process.pid))
         # TODO attempt to upload a debug log
-        path = GLOBAL_LOG_FNAME.replace(os.getcwd()+os.sep, "")
         raise LaunchError(
-            "W&B process failed to launch, see: {}".format(path))
+            "W&B process failed to launch, see: {}".format(util.min_file_path(GLOBAL_LOG_FNAME)))
 
     stdout_slave = os.fdopen(stdout_slave_fd, 'wb')
     stderr_slave = os.fdopen(stderr_slave_fd, 'wb')
@@ -795,7 +794,7 @@ def init(job_type=None, dir=None, config=None, project=None, entity=None, reinit
 
     # Access history to ensure resumed is set when resuming
     run.history
-    # Load the summary to support resuming
+    # Load the summary to support resuming, config gets loaded automatically
     run.summary.load()
 
     atexit.register(run.close_files)

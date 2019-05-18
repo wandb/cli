@@ -138,7 +138,7 @@ def test_init_run_network_down(mocker, caplog):
         api.set_current_run_id(123)
         run = Run()
         mocker.patch("wandb.run_manager.RunManager._upsert_run",
-                     lambda *args: time.sleep(0.6))
+                     lambda *args, **kwargs: time.sleep(0.6))
         rm = wandb.run_manager.RunManager(api, run)
         step = rm.init_run()
         assert step == 0

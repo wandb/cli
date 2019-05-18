@@ -31,7 +31,7 @@ def boolify(s):
 class Config(object):
     """Creates a W&B config object."""
 
-    def __init__(self, config_paths=[], wandb_dir=None, run_dir=None):
+    def __init__(self, config_paths=[], wandb_dir=None, run_dir=None, allow_val_changes=False):
         object.__setattr__(self, '_wandb_dir', wandb_dir)
 
         # OrderedDict to make writing unit tests easier. (predictable order for
@@ -39,6 +39,7 @@ class Config(object):
         object.__setattr__(self, '_items', OrderedDict())
         object.__setattr__(self, '_descriptions', {})
 
+        object.__setattr__(self, '_allow_val_changes', allow_val_changes)
         self._load_defaults()
         self._load_wandb()
         for conf_path in config_paths:
@@ -56,6 +57,9 @@ class Config(object):
         if conf_paths:
             conf_paths = conf_paths.split(',')
         return Config(config_paths=conf_paths, wandb_dir=wandb.wandb_dir())
+
+    def allow_val_changes(self):
+        self._allow_val_changes = True
 
     def _load_wandb(self):
         # We load docker into the config from the env
@@ -183,9 +187,9 @@ class Config(object):
     def _sanitize(self, key, val, allow_val_change=False):
         # We always normalize keys by stripping '-'
         key = key.strip('-')
-        if not allow_val_change:
+        if not allow_val_change and not self._allow_val_changes:
             if key in self._items and val != self._items[key]:
-                raise ConfigError('Attempted to change value of key "{}" from {} to {}\nIf you really want to do this, pass allow_val_change=True to config.update()'.format(
+                raise ConfigError('Attempted to change value of key "{}" from {} to {}\nIf you really want to do this, pass allow_val_change=True to config.update() or call config.allow_val_changes()'.format(
                     key, self._items[key], val))
         return key
 

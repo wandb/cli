@@ -526,6 +526,9 @@ def write_settings(entity, project, url):
         print('project: {}'.format(project), file=file)
         print('base_url: {}'.format(url), file=file)
 
+def min_file_path(path):
+    """Return the minimum file path to display to the user"""
+    return os.path.abspath(path).replace(os.getcwd()+os.sep, "")
 
 def write_netrc(host, entity, key):
     """Add our host and key to .netrc"""

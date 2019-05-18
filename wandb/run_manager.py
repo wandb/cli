@@ -780,6 +780,10 @@ class RunManager(object):
         # load the previous runs summary to avoid losing it, the user process will need to load it
         self._run.summary.update(json.loads(resume_status['summaryMetrics'] or "{}"))
 
+        # load the previous runs config to avoid losing it
+        self._run.config.set_run_dir(self._run.dir)
+        self._run.config.update({k: v["value"] if isinstance(v, dict) else v for k,v in six.iteritems(json.loads(resume_status['config'] or "{}"))})
+
         # Note: these calls need to happen after writing the files above. Because the access
         # to self._run.events below triggers events to initialize, but we need the previous
         # events to be written before that happens.
@@ -815,12 +819,12 @@ class RunManager(object):
         self._check_update_available(__version__)
 
         if self._output:
-            wandb.termlog("Local directory: %s" % os.path.relpath(self._run.dir))
+            wandb.termlog("Local directory: %s" % util.min_file_path(self._run.dir))
 
         self._system_stats.start()
         self._meta.start()
         logger.info("system metrics and metadata threads started")
-        new_step = None
+        new_step = 0
         if self._cloud:
             storage_id = None
             if self._run.resume != 'never':
@@ -849,20 +853,18 @@ class RunManager(object):
                     except (IndexError,ValueError):
                         history = {}
                     new_step = history.get("_step", 0)
-            else:
-                new_step = 0
 
             # DNS lookups can hang for upto 60 seconds, we wait for HTTP_TIMEOUT (10s)
             logger.info("upserting run before process can begin, waiting at most %d seconds" % InternalApi.HTTP_TIMEOUT)
             async_upsert = util.async_call(self._upsert_run, timeout=InternalApi.HTTP_TIMEOUT)
-            _, self._upsert_run_thread = async_upsert(True, storage_id, env)
+            _, self._upsert_run_thread = async_upsert(True, storage_id, env, resumed=new_step > 0)
             if self._upsert_run_thread.isAlive():
                 logger.error("Failed to connect to W&B servers after %i seconds.\
                     Letting user process proceed while attempting to reconnect." % InternalApi.HTTP_TIMEOUT)
 
         return new_step
 
-    def _upsert_run(self, retry, storage_id, env):
+    def _upsert_run(self, retry, storage_id, env, resumed=False):
         """Upsert the Run (ie. for the first time with all its attributes)
 
         Arguments:
@@ -910,7 +912,7 @@ class RunManager(object):
 
         if self._output:
             url = self._run.get_url(self._api)
-            wandb.termlog("{}{} {}".format("Resuming run" if self._run.resumed else "Syncing run", format_display_name(self._run), url))
+            wandb.termlog("{}{} {}".format("Resuming run" if resumed else "Syncing run", format_display_name(self._run), url))
             wandb.termlog("Run `wandb off` to turn off syncing.")
 
         self._run.set_environment(environment=env)
@@ -1265,7 +1267,7 @@ class RunManager(object):
         other_files = set(self._file_pusher.files()) - wandb_files - media_files
         logger.info("syncing files to cloud storage")
         if other_files:
-            wandb.termlog('Syncing files in %s:' % os.path.relpath(self._watch_dir))
+            wandb.termlog('Syncing files in %s:' % util.min_file_path(self._watch_dir))
             for save_name in sorted(other_files):
                 wandb.termlog('  %s' % save_name)
             wandb.termlog('plus {} W&B file(s) and {} media file(s)'.format(len(wandb_files), len(media_files)))
