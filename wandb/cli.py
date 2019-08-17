@@ -3,6 +3,7 @@ from __future__ import print_function
 
 import click
 import copy
+import datetime
 from functools import wraps
 import glob
 import io
@@ -902,6 +903,98 @@ def docker(ctx, docker_run_args, docker_image, nvidia, digest, jupyter, dir, no_
         wandb.termlog("Launching docker container \U0001F6A2")
     subprocess.call(command)
 
+
+@cli.command(context_settings=RUN_CONTEXT, help="Package and launch your training job on a specified backend.", hidden=True)
+@click.pass_context
+@click.argument('launch_commands', nargs=-1)
+@click.option('--backend', default="local", type=click.Choice(['local', 'ai-platform']), help="Where to run your packaged training application.")
+@display_error
+def launch(ctx, launch_commands, backend):
+    if not find_executable('docker'):
+        raise ClickException(
+            "This feature requires Docker, but Docker not installed. Install it from https://docker.com")
+    reqfile = 'requirements.txt'
+    if not (os.path.exists(reqfile) and os.path.isfile(reqfile)):
+        raise ClickException("Project dir should have a requirements.txt file to specify dependencies.")
+    
+    # Format launch commands the way docker wants them.
+    launch_commands = list(launch_commands)
+    launch_commands = ['"{}"'.format(command) for command in launch_commands]
+    launch_commands = "[{}]".format(", ".join(launch_commands))
+    docker_template = """
+        FROM nvidia/cuda:9.0-cudnn7-runtime
+
+        RUN apt-get update && apt-get install -y --no-install-recommends \\
+                wget \\
+                curl \\
+                python-dev \\
+                gcc && \\
+            rm -rf /var/lib/apt/lists/*
+
+        RUN curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py && \\
+            python get-pip.py && \\
+            pip install setuptools && \\
+            rm get-pip.py
+
+        RUN mkdir /root/trainer
+
+        COPY requirements.txt /root/trainer/requirements.txt
+
+        WORKDIR /root/trainer
+
+        RUN pip install -r requirements.txt
+
+        COPY . ./
+
+        # Sets up the entry point to invoke the trainer.
+        ENTRYPOINT {launch_commands}
+
+        ENV WANDB_API_KEY {api_key}
+"""
+    dockerfile = docker_template.format(launch_commands=launch_commands, api_key=api.api_key)
+    wandb.termlog("Generated dockerfile: ")
+    print(dockerfile)
+    wandb.termlog("Building training image...")
+    with open("Dockerfile", "w") as f:
+        f.write(dockerfile)
+
+    def run_cmd(command):
+        print('Running ' + command)
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, shell=True)
+        while True:
+            line = process.stdout.readline().rstrip()
+            line = line.decode() if isinstance(line, bytes) else line
+            if not line:
+                break
+            print(line)
+
+    if backend == "local":
+        docker_cmd = 'docker build . -t localbuild'
+        run_cmd(docker_cmd)
+
+        wandb.termlog('Running image locally...')
+        image_id = subprocess.check_output("docker images -q localbuild".split(' ')).rstrip()
+        image_id = image_id.decode() if isinstance(image_id, bytes) else image_id
+        print(image_id)
+        subprocess.check_call("docker run -it {}".format(image_id).split(' '))
+        return
+    elif backend == 'ai-platform':
+        project_name = os.path.basename(os.getcwd())
+        gcp_project_name = subprocess.check_output('gcloud config list project --format value(core.project)'.split(' ')).rstrip()
+        image_id = str(image_id, 'utf-8')
+        image_id = image_id.decode() if isinstance(image_id, bytes) else image_id
+        image_name = 'gcr.io/{gcp_project_name}/{project_name}_container:{project_name}'.format(gcp_project_name=gcp_project_name, project_name=project_name)
+        docker_cmd = 'docker build -t {} .'.format(image_name)
+        run_cmd(docker_cmd)
+
+        wandb.termlog("Uploading image to gcr...")
+        run_cmd("docker push {}".format(image_name))
+        wandb.termlog("Launching job on ai-platform...")
+        timestamp = datetime.datetime.now().strftime("%d%m%y_%H%M%S")
+        run_cmd("gcloud beta ai-platform jobs submit training {project_name}_{timestamp} \
+                --region us-central1 \
+                --master-image-uri {image_name} \
+                --scale-tier BASIC_GPU".format(project_name=project_name, timestamp=timestamp, image_name=image_name))
 
 
 MONKEY_CONTEXT = copy.copy(CONTEXT)
