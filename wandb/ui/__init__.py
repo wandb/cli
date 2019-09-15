@@ -44,12 +44,34 @@ class Inference(object):
         self.render('''
             <div id="root"></div>
             <script type="text/javascript">
+            const host = "%s"
             window.initialScope = %s
+            document.head.innerHTML = document.head.innerHTML + "<base href='" + host + "' />";
+            const body = fetch(host+"/asset-manifest.json").then((a) => a.json().then(j => j));
+            function load(url, type='js') {
+                const promise = new Promise((resolve, reject) => {
+                    const node = document.createElement(type === 'css' ? 'link' : 'script');
+                    if(type === 'css') {
+                        node.href = value
+                        node.rel = 'stylesheet'
+                    } else {
+                        node.src = value
+                    }
+                    node.onload = resolve;
+                    node.onerror = reject;
+                    document.head.appendChild(node);
+                });
+                return promise
+            }
+            for (let [key, value] of Object.entries(body)) {
+                if(key.endsWith('js')) {
+                    load(value)
+                } else if(key.endsWith('css')) {
+                    load(value, 'css')
+                }
+            }
             </script>
-            <link href="https://cocky-kowalevski-373523.netlify.com/static/css/main.0d13eeef.chunk.css" rel="stylesheet">
-            <script src="https://cocky-kowalevski-373523.netlify.com/static/js/2.9ae5943a.chunk.js" />
-            <script src="https://cocky-kowalevski-373523.netlify.com/static/js/main.bd6e96d6.chunk.js" />
-            ''' % json.dumps({"code": CODE[template]}))
+            ''' % ("https://cocky-kowalevski-373523.netlify.com", json.dumps({"code": CODE[template]})))
 
         def wrap(f):
             @wraps(f)
