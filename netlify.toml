@@ -1,0 +1,4 @@
+[build]
+  base    = "wandb/ui/frontend"
+  command = "yarn build"
+  publish = "build"
