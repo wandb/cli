@@ -24,7 +24,7 @@ CODE = {
 }
 
 
-class UI(object):
+class Inference(object):
     def __call__(self, inp, out, options={}):
         template = "default"
         if "image" in inp:
@@ -56,4 +56,4 @@ class UI(object):
         return wrap
 
 
-sys.modules[__name__] = UI()
+inference = Inference()
