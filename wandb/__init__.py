@@ -1011,6 +1011,7 @@ docker = util.LazyLoader('docker', globals(), 'wandb.docker')
 xgboost = util.LazyLoader('xgboost', globals(), 'wandb.xgboost')
 gym = util.LazyLoader('gym', globals(), 'wandb.gym')
 ray = util.LazyLoader('ray', globals(), 'wandb.ray')
+ui = util.LazyLoader('ui', globals(), 'wandb.ui')
 
 
 __all__ = ['init', 'config', 'termlog', 'termwarn', 'termerror', 'tensorflow',
