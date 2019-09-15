@@ -151,6 +151,10 @@ class LazyLoader(types.ModuleType):
 
         return module
 
+    def __call__(self, *args, **kwargs):
+        module = self._load()
+        return model(*args, **kwargs)
+
     def __getattr__(self, item):
         module = self._load()
         return getattr(module, item)
