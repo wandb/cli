@@ -950,6 +950,7 @@ def launch(ctx, launch_commands, backend):
         # Requires python2. Add a warning or something.
         project_name = os.path.basename(os.getcwd())
         gcp_project_name = subprocess.check_output('gcloud config list project --format value(core.project)'.split(' ')).rstrip()
+        gcp_project_name = gcp_project_name.decode() if isinstance(gcp_project_name, bytes) else gcp_project_name
         image_name = 'gcr.io/{gcp_project_name}/{project_name}_container:{project_name}'.format(gcp_project_name=gcp_project_name, project_name=project_name)
         docker_cmd = 'docker build -t {} .'.format(image_name)
         run_cmd(docker_cmd)
