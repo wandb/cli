@@ -961,7 +961,8 @@ def launch(ctx, launch_commands, backend):
         run_cmd("gcloud beta ai-platform jobs submit training {project_name}_{timestamp} \
                 --region us-central1 \
                 --master-image-uri {image_name} \
-                --scale-tier BASIC_GPU".format(project_name=project_name, timestamp=timestamp, image_name=image_name))
+                --scale-tier CUSTOM \
+                --master-machine-type standard_v100".format(project_name=project_name, timestamp=timestamp, image_name=image_name))
 
 
 MONKEY_CONTEXT = copy.copy(CONTEXT)
