@@ -9,7 +9,7 @@ from __future__ import absolute_import, print_function
 
 __author__ = """Chris Van Pelt"""
 __email__ = 'vanpelt@wandb.com'
-__version__ = '0.8.8'
+__version__ = '0.8.11'
 
 import atexit
 import click
@@ -63,6 +63,8 @@ from wandb.dataframes import image_segmentation_multiclass_dataframe
 
 from wandb import wandb_torch
 from wandb.wandb_controller import controller
+from wandb.wandb_agent import agent
+from wandb.wandb_controller import sweep
 
 
 logger = logging.getLogger(__name__)
@@ -73,6 +75,7 @@ if __stage_dir__ is not None:
     GLOBAL_LOG_FNAME = os.path.abspath(os.path.join(wandb_dir(), 'debug.log'))
 else:
     GLOBAL_LOG_FNAME = os.path.join(tempfile.gettempdir(), 'wandb-debug.log')
+
 
 def _debugger(*args):
     import pdb
@@ -281,27 +284,67 @@ def _init_headless(run, cloud=True):
 def load_ipython_extension(ipython):
     pass
 
-def jupyter_login(force=True):
+
+def login(anonymous=None, key=None):
+    """Ensure this machine is logged in
+
+       You can manually specify a key, but this method is intended to prompt for user input.
+
+       anonymous can be "never", "must", or "allow".  If set to "must" we'll always login anonymously,
+       if set to "allow" we'll only create an anonymous user if the user isn't already logged in.
+    """
+    # This ensures we have a global api object
+    ensure_configured()
+    if anonymous:
+        os.environ[env.ANONYMOUS] = anonymous
+    anonymous = anonymous or "never"
+    in_jupyter = _get_python_type() != "python"
+    if key:
+        termwarn("If you're specifying your api key in code, ensure this code is not shared publically.\nConsider setting the WANDB_API_KEY environment variable, or running `wandb login` from the command line.")
+        if in_jupyter:
+            termwarn("Calling wandb.login() without arguments from jupyter should prompt you for an api key.")
+        util.set_api_key(api, key)
+        return key
+    elif api.api_key and anonymous != "must":
+        return api.api_key
+    elif in_jupyter:
+        os.environ[env.JUPYTER] = "true"
+        return _jupyter_login(api=api)
+    else:
+        return util.prompt_api_key(api)
+
+
+def _jupyter_login(force=True, api=None):
     """Attempt to login from a jupyter environment
 
     If force=False, we'll only attempt to auto-login, otherwise we'll prompt the user
     """
-    key = None
-    if 'google.colab' in sys.modules:
-        key = jupyter.attempt_colab_login(run.api.app_url)
-        if key:
-            os.environ[env.API_KEY] = key
-            util.write_netrc(run.api.api_url, "user", key)
-    if not key and force:
-        termerror(
-            "Not authenticated.  Copy a key from https://app.wandb.ai/authorize")
-        key = getpass.getpass("API Key: ").strip()
-        if len(key) == 40:
-            os.environ[env.API_KEY] = key
-            util.write_netrc(run.api.api_url, "user", key)
-        else:
-            raise ValueError("API Key must be 40 characters long")
-    return key
+    def get_api_key_from_browser(signup=False):
+        key, anonymous = None, False
+        if 'google.colab' in sys.modules:
+            key = jupyter.attempt_colab_login(api.app_url)
+        elif 'databricks_cli' in sys.modules and 'dbutils' in sys.modules:
+            # Databricks does not seem to support getpass() so we need to fail
+            # early and prompt the user to configure the key manually for now.
+            termerror(
+                "Databricks requires api_key to be configured manually, instructions at: http://docs.wandb.com/integrations/databricks")
+            raise LaunchError("Databricks integration requires api_key to be configured.")
+        # For jupyter we default to not allowing anonymous
+        if not key and os.environ.get(env.ANONYMOUS, "never") != "never":
+            key = api.create_anonymous_api_key()
+            anonymous = True
+        if not key and force:
+            try:
+                termerror("Not authenticated.  Copy a key from https://app.wandb.ai/authorize")
+                key = getpass.getpass("API Key: ").strip()
+            except NotImplementedError:
+                termerror("Can't accept input in this environment, you should set WANDB_API_KEY or call wandb.login(key='YOUR_API_KEY')")
+        return key, anonymous
+
+    api = api or (run.api if run else None)
+    if not api:
+        raise LaunchError("Internal error: api required for jupyter login")
+    return util.prompt_api_key(api, browser_callback=get_api_key_from_browser)
 
 
 def _init_jupyter(run):
@@ -315,21 +358,30 @@ def _init_jupyter(run):
     # I also disabled run logging because we're rairly using it.
     # try_to_set_up_global_logging()
     # run.enable_logging()
+    os.environ[env.JUPYTER] = "true"
 
     if not run.api.api_key:
-        jupyter_login()
+        key = _jupyter_login()
         # Ensure our api client picks up the new key
-        run.api.reauth()
-    os.environ["WANDB_JUPYTER"] = "true"
+        if key:
+            run.api.reauth()
+        else:
+            run.mode = "dryrun"
     run.resume = "allow"
-    display(HTML('''
-        Notebook configured with <a href="https://wandb.com" target="_blank">W&B</a>. You can <a href="{}" target="_blank">open</a> the run page, or call <code>%%wandb</code>
-        in a cell containing your training loop to display live results.  Learn more in our <a href="https://docs.wandb.com/docs/integrations/jupyter.html" target="_blank">docs</a>.
-    '''.format(run.get_url())))
-    try:
-        run.save()
-    except (CommError, ValueError) as e:
-        termerror(str(e))
+    if run.mode == "dryrun":
+        display(HTML('''
+            Notebook configured with <a href="https://wandb.com" target="_blank">W&B</a>.  Results will not be sent to the cloud.  
+            Call wandb.login() with an <a href="{}/authorize">api key</a> to authenticate this machine.
+        '''.format(run.api.app_url)))
+    else:
+        display(HTML('''
+            Notebook configured with <a href="https://wandb.com" target="_blank">W&B</a>. You can <a href="{}" target="_blank">open</a> the run page, or call <code>%%wandb</code>
+            in a cell containing your training loop to display live results.  Learn more in our <a href="https://docs.wandb.com/docs/integrations/jupyter.html" target="_blank">docs</a>.
+        '''.format(run.get_url())))
+        try:
+            run.save()
+        except (CommError, ValueError) as e:
+            termerror(str(e))
     run.set_environment()
     run._init_jupyter_agent()
     ipython = get_ipython()
@@ -340,6 +392,7 @@ def _init_jupyter(run):
         global START_TIME
         START_TIME = time.time()
     ipython.events.register("pre_run_cell", reset_start)
+
     def cleanup():
         # shutdown async logger because _user_process_finished isn't called in jupyter
         shutdown_async_log_thread()
@@ -383,13 +436,14 @@ def _user_process_finished(server, hooks, wandb_process, stdout_redirector, stde
 # pass the run into WandbCallback).  run is None instead of a PreInitObject
 # as many places in the code check this.
 run = None
-config = util.PreInitObject("wandb.config") # config object shared with the global run
-summary = util.PreInitObject("wandb.summary") # summary object shared with the global run
+config = util.PreInitObject("wandb.config")  # config object shared with the global run
+summary = util.PreInitObject("wandb.summary")  # summary object shared with the global run
 Api = PublicApi
 # Stores what modules have been patched
 patched = {
     "tensorboard": [],
-    "keras": []
+    "keras": [],
+    "gym": []
 }
 _saved_files = set()
 
@@ -469,14 +523,18 @@ def restore(name, run_path=None, replace=False, root="."):
         return None
     return files[0].download(root=root, replace=True)
 
+
 _tunnel_process = None
+
+
 def tunnel(host, port):
     """Simple helper to open a tunnel.  Returns a public HTTPS url or None"""
     global _tunnel_process
     if _tunnel_process:
         _tunnel_process.kill()
         _tunnel_process = None
-    process = subprocess.Popen("ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=60 -R 80:{}:{} serveo.net".format(host, port), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    process = subprocess.Popen("ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=60 -R 80:{}:{} serveo.net".format(
+        host, port), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     while process.returncode is None:
         for line in process.stdout:
             match = re.match(r".+(https.+)$", line.decode("utf-8").strip())
@@ -487,6 +545,7 @@ def tunnel(host, port):
         process.poll()
         time.sleep(1)
     return None
+
 
 def monitor(options={}):
     """Starts syncing with W&B if you're in Jupyter.  Displays your W&B charts live in a Jupyter notebook.
@@ -499,7 +558,7 @@ def monitor(options={}):
 
     class Monitor():
         def __init__(self, options={}):
-            if os.getenv("WANDB_JUPYTER"):
+            if os.getenv(env.JUPYTER):
                 display(jupyter.Run())
             else:
                 self.rm = False
@@ -521,6 +580,8 @@ _async_log_queue = queue.Queue()
 _async_log_thread_shutdown_event = threading.Event()
 _async_log_thread_complete_event = threading.Event()
 _async_log_thread = None
+
+
 def _async_log_thread_target():
     """Consumes async logs from our _async_log_queue and actually logs them"""
     global _async_log_thread
@@ -534,6 +595,7 @@ def _async_log_thread_target():
     _async_log_thread_complete_event.set()
     _async_log_thread = None
 
+
 def _ensure_async_log_thread_started():
     """Ensures our log consuming thread is started"""
     global _async_log_thread
@@ -543,13 +605,15 @@ def _ensure_async_log_thread_started():
         _async_log_thread.daemon = True
         _async_log_thread.start()
 
+
 def shutdown_async_log_thread():
     """Shuts down our async logging thread"""
     if _async_log_thread:
         _async_log_thread_shutdown_event.set()
-        res = _async_log_thread_complete_event.wait(2) # TODO: possible race here
+        res = _async_log_thread_complete_event.wait(2)  # TODO: possible race here
         if res is None:
             termwarn('async log queue not empty after 2 seconds, some log statements will be dropped')
+
 
 def log(row=None, commit=True, step=None, sync=True, *args, **kwargs):
     """Log a dict to the global run's history.
@@ -594,6 +658,7 @@ def ensure_configured():
     # We re-initialize here for tests
     api = InternalApi()
     GLOBAL_LOG_FNAME = os.path.abspath(os.path.join(wandb_dir(), 'debug.log'))
+
 
 def uninit(only_patches=False):
     """Undo the effects of init(). Useful for testing.
@@ -693,7 +758,8 @@ def join():
 
 def init(job_type=None, dir=None, config=None, project=None, entity=None, reinit=None, tags=None,
          group=None, allow_val_change=False, resume=False, force=False, tensorboard=False,
-         sync_tensorboard=False, name=None, notes=None, id=None, magic=None):
+         sync_tensorboard=False, monitor_gym=False, name=None, notes=None, id=None, magic=None,
+         anonymous=None):
     """Initialize W&B
 
     If called from within Jupyter, initializes a new run and waits for a call to
@@ -718,11 +784,14 @@ def init(job_type=None, dir=None, config=None, project=None, entity=None, reinit
         force (bool, optional): Force authentication with wandb, defaults to False
         magic (bool, dict, or str, optional): magic configuration as bool, dict, json string,
             yaml filename
+        anonymous (str, optional): Can be "allow", "must", or "never". Controls whether anonymous logging is allowed.
+            Defaults to never.
 
     Returns:
         A wandb.run object for metric and config logging.
     """
-    trigger.call('on_init', **locals())
+    init_args = locals()
+    trigger.call('on_init', **init_args)
     global run
     global __stage_dir__
 
@@ -735,6 +804,8 @@ def init(job_type=None, dir=None, config=None, project=None, entity=None, reinit
     # TODO: deprecate tensorboard
     if tensorboard or sync_tensorboard and len(patched["tensorboard"]) == 0:
         util.get_module("wandb.tensorboard").patch()
+    if monitor_gym and len(patched["gym"]) == 0:
+        util.get_module("wandb.gym").monitor()
 
     sagemaker_config = util.parse_sm_config()
     tf_config = util.parse_tfjob_config()
@@ -784,7 +855,7 @@ def init(job_type=None, dir=None, config=None, project=None, entity=None, reinit
         os.environ[env.TAGS] = ",".join(tags)
     if id:
         os.environ[env.RUN_ID] = id
-        if name is None:
+        if name is None and resume is not "must":
             # We do this because of https://github.com/wandb/core/issues/2170
             # to ensure that the run's name is explicitly set to match its
             # id. If we don't do this and the id is eight characters long, the
@@ -793,6 +864,13 @@ def init(job_type=None, dir=None, config=None, project=None, entity=None, reinit
             # In any case, if the user is explicitly setting `id` but not
             # `name`, their id is probably a meaningful string that we can
             # use to label the run.
+            #
+            # In the resume="must" case, we know we are resuming, so we should
+            # make sure to not set the name because it would have been set with
+            # the original run.
+            #
+            # TODO: handle "auto" resume by moving this logic later when we know
+            # if there is a resume.
             name = os.environ.get(env.NAME, id)  # environment variable takes precedence over this.
     if name:
         os.environ[env.NAME] = name
@@ -808,10 +886,15 @@ def init(job_type=None, dir=None, config=None, project=None, entity=None, reinit
         else:
             termwarn("wandb.init called with invalid magic parameter type", repeat=False)
         from wandb import magic_impl
-        magic_impl.magic_install()
+        magic_impl.magic_install(init_args=init_args)
     if dir:
         os.environ[env.DIR] = dir
         util.mkdir_exists_ok(wandb_dir())
+    if anonymous is not None:
+        os.environ[env.ANONYMOUS] = anonymous
+    if os.environ.get(env.ANONYMOUS, "never") not in ["allow", "must", "never"]:
+        raise LaunchError("anonymous must be set to 'allow', 'must', or 'never'")
+
     resume_path = os.path.join(wandb_dir(), wandb_run.RESUME_FNAME)
     if resume == True:
         os.environ[env.RESUME] = "auto"
@@ -889,7 +972,7 @@ def init(job_type=None, dir=None, config=None, project=None, entity=None, reinit
                 termerror(
                     "No credentials found.  Run \"wandb login\" or \"wandb off\" to disable wandb")
             else:
-                if run.check_anonymous():
+                if util.prompt_api_key(api):
                     _init_headless(run)
                 else:
                     termlog(
@@ -933,6 +1016,8 @@ keras = util.LazyLoader('keras', globals(), 'wandb.keras')
 fastai = util.LazyLoader('fastai', globals(), 'wandb.fastai')
 docker = util.LazyLoader('docker', globals(), 'wandb.docker')
 xgboost = util.LazyLoader('xgboost', globals(), 'wandb.xgboost')
+gym = util.LazyLoader('gym', globals(), 'wandb.gym')
+ray = util.LazyLoader('ray', globals(), 'wandb.ray')
 
 
 __all__ = ['init', 'config', 'termlog', 'termwarn', 'termerror', 'tensorflow',

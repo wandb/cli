@@ -55,9 +55,12 @@ def patch_tf_keras():
     from tensorflow.python.eager import context
     from tensorflow.python.keras.engine import training_arrays
     from tensorflow.python.keras.engine import training_generator
-    from tensorflow.python.keras.engine import training_utils
+
+    training_v2 = wandb.util.get_module('tensorflow.python.keras.engine.training_v2')
     old_arrays = training_arrays.fit_loop
     old_generator = training_generator.fit_generator
+    if training_v2:
+        old_v2 = training_v2.Loop.fit
 
     def set_wandb_attrs(cbk, val_data):
         if isinstance(cbk, WandbCallback):
@@ -96,10 +99,23 @@ def patch_tf_keras():
                 set_wandb_attrs(cbk, val_data)
         return old_generator(*args, **kwargs)
 
+    def new_v2(*args, **kwargs):
+        cbks = kwargs.get("callbacks")
+        val_data = kwargs.get("validation_data")
+        if val_data:
+            for cbk in cbks:
+                set_wandb_attrs(cbk, val_data)
+        return old_v2(*args, **kwargs)
+
     training_arrays.orig_fit_loop = old_arrays
     training_arrays.fit_loop = new_arrays
     training_generator.orig_fit_generator = old_generator
     training_generator.fit_generator = new_generator
+    if training_v2:
+        training_v2.Loop.fit = new_v2
+        wandb.patched["keras"].append(
+            ["tensorflow.python.keras.engine.training_v2.Loop", "fit"])
+
     wandb.patched["keras"].append(
         ["tensorflow.python.keras.engine.training_arrays", "fit_loop"])
     wandb.patched["keras"].append(
@@ -229,6 +245,8 @@ class WandbCallback(keras.callbacks.Callback):
 
     def set_model(self, model):
         self.model = model
+        if self.input_type == 'auto' and len(model.inputs) == 1:
+            self.input_type = wandb.util.guess_data_type(model.inputs[0].shape, risky=True)
         if self.input_type and self.output_type is None and len(model.outputs) == 1:
             self.output_type = wandb.util.guess_data_type(model.outputs[0].shape)
 
@@ -451,15 +469,26 @@ class WandbCallback(keras.callbacks.Callback):
 
         gradients = self.model.optimizer.get_gradients(
             self.model.total_loss, weights)  # gradient tensors
+        if hasattr(self.model, "targets"):
+            # TF < 1.14
+            target = self.model.targets[0]
+            sample_weight = self.model.sample_weights[0]
+        elif hasattr(self.model, "_training_endpoints") and len(self.model._training_endpoints) > 0:
+            # TF > 1.14 TODO: not sure if we're handling sample_weight properly here...
+            target = self.model._training_endpoints[0].training_target.target
+            sample_weight = self.model._training_endpoints[0].sample_weight or K.variable(1)
+        else:
+            wandb.termwarn(
+                "Couldn't extract gradients from your model, this could be an unsupported version of keras.  File an issue here: https://github.com/wandb/client", repeat=False)
+            return metrics
         input_tensors = [self.model.inputs[0],  # input data
                          # how much to weight each sample by
-                         self.model.sample_weights[0],
-                         self.model.targets[0],  # labels
+                         sample_weight,
+                         target,  # labels
                          K.learning_phase(),  # train or test mode
                          ]
 
         get_gradients = K.function(inputs=input_tensors, outputs=gradients)
-
         grads = get_gradients([X_train, np.ones(len(y_train)), y_train])
 
         for (weight, grad) in zip(weights, grads):

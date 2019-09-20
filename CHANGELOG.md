@@ -1,3 +1,60 @@
+## 0.8.11 (Sep 19, 2019)
+
+#### :bug: Bug Fix
+
+-   Fix public api returning incorrect data when config value is 0 or False
+-   Resumed runs no longer overwrite run names with run id
+
+#### :nail_care: Enhancement
+
+-   Added recording of spell.run id in config
+
+## 0.8.10 (Sep 13, 2019)
+
+#### :bug: Bug Fix
+
+-   wandb magic handles the case of tf.keras and keras being loaded
+-   tensorboard logging won't drop steps if multiple loggers have different global_steps
+-   keras gradient logging works in the latest tf.keras
+-   keras validation_data is properly set in tensorflow 2
+-   wandb pull command creates directories if they don't exist, thanks @chmod644
+-   file upload batching now asserts a minimum size
+-   sweeps works in python2 again
+-   scan_history now iterates the full set of points
+-   jupyter will run local mode if credentials can't be obtained
+
+#### :nail_care: Enhancement
+
+-   Sweeps can now be run from within jupyter / directly from python! https://docs.wandb.com/sweeps/python
+-   New openai gym integration will automatically log videos, enabled with the monitor_gym keyword argument to wandb.init
+-   Ray Tune logging callback in wandb.ray.WandbLogger
+-   New global config file in ~/.config/wandb for global settings
+-   Added tests for fastai, thanks @borisdayma
+-   Public api performance enhancements
+-   Deprecated username in favor of enitity in the public api for consistency
+-   Anonymous login support enabled by default
+-   New wandb.login method to be used in jupyter enabling anonymous logins
+-   Better dependency error messages for data frames
+-   Initial integration with spell.run
+-   All images are now rendered as PNG to avoid JPEG artifacts
+-   Public api now has a projects field
+
+## 0.8.9 (Aug 19, 2019)
+
+#### :bug: Bug Fix
+
+-   run.summary updates work in jupyter before log is called
+-   don't require numpy to be installed
+-   Setting nested keys in summary works
+-   notebooks in nested directories are properly saved
+-   Don't retry 404's / better error messaging from the server
+-   Strip leading slashes when loading paths in the public api
+
+#### :nail_care: Enhancement
+
+-   Small files are batch uploaded as gzipped tarballs
+-   TensorBoardX gifs are logged to wandb
+
 ## 0.8.8 (Aug 13, 2019)
 
 #### :bug: Bug Fix
@@ -16,7 +73,7 @@
 -   increased the max number of images for fastai callback
 -   new wandb.Video tag for logging video
 -   sync=False argument to wandb.log moves logging to a thread
--   New local sweep controller for custom search lo\gic
+-   New local sweep controller for custom search logic
 -   Anonymous login support for easier onboarding
 -   Calling wandb.init multiple times in jupyter doesn't error out
 

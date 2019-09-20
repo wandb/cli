@@ -1,3 +1,4 @@
+import contextlib
 import datetime
 import pytest
 import os
@@ -43,6 +44,14 @@ def empty_netrc(monkeypatch):
             return {'api.wandb.ai': None}
     monkeypatch.setattr(netrc, "netrc", lambda *args: FakeNet())
 
+
+@contextlib.contextmanager
+def config_dir():
+    try:
+        os.environ["WANDB_CONFIG"] = os.getcwd()
+        yield
+    finally:
+        del os.environ["WANDB_CONFIG"]
 
 def setup_module(module):
     os.environ["WANDB_TEST"] = "true"
@@ -443,6 +452,7 @@ def test_login_key_arg(runner, empty_netrc, local_netrc):
             generatedNetrc = f.read()
         assert DUMMY_API_KEY in generatedNetrc
 
+
 def test_login_abort(runner, empty_netrc, local_netrc, mocker, monkeypatch):
     with runner.isolated_filesystem():
         reload(wandb)
@@ -454,7 +464,8 @@ def test_login_abort(runner, empty_netrc, local_netrc, mocker, monkeypatch):
         print('Exception: ', result.exception)
         print('Traceback: ', traceback.print_tb(result.exc_info[2]))
         assert result.exit_code == 0
-        assert "No key provided, please try again" in result.output
+        assert "Disabling Weights & Biases. Run 'wandb login' again to re-enable" in result.output
+
 
 def test_signup(runner, empty_netrc, local_netrc, mocker, monkeypatch):
     with runner.isolated_filesystem():
@@ -464,14 +475,14 @@ def test_signup(runner, empty_netrc, local_netrc, mocker, monkeypatch):
         def prompt(*args, **kwargs):
             #raise click.exceptions.Abort()
             return DUMMY_API_KEY
-        mocker.patch("click.prompt", prompt)
+        mocker.patch("wandb.util.prompt_api_key", prompt)
         result = runner.invoke(cli.login)
         print('Output: ', result.output)
         print('Exception: ', result.exception)
         print('Traceback: ', traceback.print_tb(result.exc_info[2]))
         assert result.exit_code == 0
-        assert "https://app.wandb.ai/authorize" in result.output
         assert "Successfully logged in to Weights & Biases!" in result.output
+
 
 def test_init_new_login_no_browser(runner, empty_netrc, local_netrc, request_mocker, query_projects, query_viewer, monkeypatch):
     mock = query_projects(request_mocker)
@@ -481,19 +492,22 @@ def test_init_new_login_no_browser(runner, empty_netrc, local_netrc, request_moc
         # If the test was run from a directory containing .wandb, then __stage_dir__
         # was '.wandb' when imported by api.py, reload to fix. UGH!
         reload(wandb)
-        result = runner.invoke(cli.init, input="%s\nvanpelt" % DUMMY_API_KEY)
-        print('Output: ', result.output)
-        print('Exception: ', result.exception)
-        print('Traceback: ', traceback.print_tb(result.exc_info[2]))
+        login_result = runner.invoke(cli.login, [DUMMY_API_KEY])
+        init_result = runner.invoke(cli.init, input="y\n\n\n")
+        print('Output: ', init_result.output)
+        print('Exception: ', init_result.exception)
+        print('Traceback: ', traceback.print_tb(init_result.exc_info[2]))
         assert mock.called
-        assert result.exit_code == 0
+        assert login_result.exit_code == 0
+        assert init_result.exit_code == 0
         with open("netrc", "r") as f:
             generatedNetrc = f.read()
         with open("wandb/settings", "r") as f:
             generatedWandb = f.read()
         assert DUMMY_API_KEY in generatedNetrc
         assert "test_model" in generatedWandb
-        assert "Successfully logged in" in result.output
+        assert "Successfully logged in" in login_result.output
+        assert "This directory is configured!" in init_result.output
 
 
 @pytest.mark.teams("foo", "bar")
@@ -504,13 +518,14 @@ def test_init_multi_team(runner, empty_netrc, local_netrc, request_mocker, query
         # If the test was run from a directory containing .wandb, then __stage_dir__
         # was '.wandb' when imported by api.py, reload to fix. UGH!
         reload(wandb)
-        result = runner.invoke(
-            cli.init, input="%s\nvanpelt" % DUMMY_API_KEY)
-        print('Output: ', result.output)
-        print('Exception: ', result.exception)
-        print('Traceback: ', traceback.print_tb(result.exc_info[2]))
+        login_result = runner.invoke(cli.login, [DUMMY_API_KEY])
+        init_result = runner.invoke(cli.init, input="y\nvanpelt\n")
+        print('Output: ', init_result.output)
+        print('Exception: ', init_result.exception)
+        print('Traceback: ', traceback.print_tb(init_result.exc_info[2]))
         assert mock.called
-        assert result.exit_code == 0
+        assert login_result.exit_code == 0
+        assert init_result.exit_code == 0
         with open("netrc", "r") as f:
             generatedNetrc = f.read()
         with open("wandb/settings", "r") as f:
@@ -523,9 +538,8 @@ def test_init_reinit(runner, empty_netrc, local_netrc, request_mocker, query_pro
     query_viewer(request_mocker)
     query_projects(request_mocker)
     with runner.isolated_filesystem():
-        os.mkdir('wandb')
-        result = runner.invoke(
-            cli.init, input="%s\nvanpelt\n" % DUMMY_API_KEY)
+        runner.invoke(cli.login, [DUMMY_API_KEY])
+        result = runner.invoke(cli.init, input="y\nvanpelt\n")
         print(result.output)
         print(result.exception)
         print(traceback.print_tb(result.exc_info[2]))
@@ -542,19 +556,21 @@ def test_init_add_login(runner, empty_netrc, local_netrc, request_mocker, query_
     query_viewer(request_mocker)
     query_projects(request_mocker)
     with runner.isolated_filesystem():
-        with open("netrc", "w") as f:
-            f.write("previous config")
-        result = runner.invoke(cli.init, input="%s\nvanpelt\n" % DUMMY_API_KEY)
-        print(result.output)
-        print(result.exception)
-        print(traceback.print_tb(result.exc_info[2]))
-        assert result.exit_code == 0
-        with open("netrc", "r") as f:
-            generatedNetrc = f.read()
-        with open("wandb/settings", "r") as f:
-            generatedWandb = f.read()
-        assert DUMMY_API_KEY in generatedNetrc
-        assert "previous config" in generatedNetrc
+        with config_dir():
+            with open("netrc", "w") as f:
+                f.write("previous config")
+            runner.invoke(cli.login, [DUMMY_API_KEY])
+            result = runner.invoke(cli.init, input="y\n%s\nvanpelt\n" % DUMMY_API_KEY)
+            print(result.output)
+            print(result.exception)
+            print(traceback.print_tb(result.exc_info[2]))
+            assert result.exit_code == 0
+            with open("netrc", "r") as f:
+                generatedNetrc = f.read()
+            with open("wandb/settings", "r") as f:
+                generatedWandb = f.read()
+            assert DUMMY_API_KEY in generatedNetrc
+            assert "previous config" in generatedNetrc
 
 
 def test_init_existing_login(runner, local_netrc, request_mocker, query_projects, query_viewer):

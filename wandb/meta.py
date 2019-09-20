@@ -48,16 +48,17 @@ class Meta(object):
         except (ImportError, AttributeError):
             self.data["program"] = '<python with no main file>'
             if wandb._get_python_type() != "python":
-                meta = wandb.jupyter.notebook_metadata()
-                if meta.get("path"):
-                    if "fileId=" in meta["path"]:
-                        self.data["colab"] = "https://colab.research.google.com/drive/"+meta["path"].split("fileId=")[1]
-                        self.data["program"] = meta["name"]
-                    else:
-                        self.data["program"] = meta["path"]
-                        self.data["root"] = meta["root"]
-                elif os.getenv(env.NOTEBOOK_NAME):
+                if os.getenv(env.NOTEBOOK_NAME):
                     self.data["program"] = os.getenv(env.NOTEBOOK_NAME)
+                else:
+                    meta = wandb.jupyter.notebook_metadata()
+                    if meta.get("path"):
+                        if "fileId=" in meta["path"]:
+                            self.data["colab"] = "https://colab.research.google.com/drive/"+meta["path"].split("fileId=")[1]
+                            self.data["program"] = meta["name"]
+                        else:
+                            self.data["program"] = meta["path"]
+                            self.data["root"] = meta["root"]
 
         program = os.path.join(self.data["root"], self.data["program"])
         if not os.getenv(env.DISABLE_CODE):
@@ -66,11 +67,12 @@ class Meta(object):
                     "remote": self._api.git.remote_url,
                     "commit": self._api.git.last_commit
                 }
+
                 self.data["email"] = self._api.git.email
                 self.data["root"] = self._api.git.root or self.data["root"]
 
             if os.path.exists(program) and self._api.git.is_untracked(self.data["program"]):
-                util.mkdir_exists_ok(os.path.join(self.out_dir, "code"))
+                util.mkdir_exists_ok(os.path.join(self.out_dir, "code", os.path.dirname(self.data["program"])))
                 saved_program = os.path.join(self.out_dir, "code", self.data["program"])
                 if not os.path.exists(saved_program):
                     self.data["codeSaved"] = True
@@ -78,17 +80,25 @@ class Meta(object):
 
         self.data["startedAt"] = datetime.utcfromtimestamp(
             wandb.START_TIME).isoformat()
-        self.data["host"] = os.environ.get(env.HOST, socket.gethostname())
         try:
             username = getpass.getuser()
         except KeyError:
             # getuser() could raise KeyError in restricted environments like
             # chroot jails or docker containers.  Return user id in these cases.
             username = str(os.getuid())
-        self.data["username"] = os.getenv(env.USERNAME, username)
+
+        # Host names, usernames, emails, the root directory, and executable paths are sensitive for anonymous users.
+        if self._api.settings().get('anonymous') != 'true':
+            self.data["host"] = os.environ.get(env.HOST, socket.gethostname())
+            self.data["username"] = os.getenv(env.USERNAME, username)
+            self.data["executable"] = sys.executable
+        else:
+            self.data.pop("email", None)
+            self.data.pop("root", None)
+
         self.data["os"] = platform.platform(aliased=True)
         self.data["python"] = platform.python_version()
-        self.data["executable"] = sys.executable
+
         if env.get_docker():
             self.data["docker"] = env.get_docker()
         try:

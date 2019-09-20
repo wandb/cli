@@ -215,8 +215,13 @@ def data_frame_to_json(df, run, key, step):
     """
     pandas = util.get_module("pandas")
     fastparquet = util.get_module("fastparquet")
-    if not pandas or not fastparquet:
-        raise wandb.Error("Failed to save data frame: unable to import either pandas or fastparquet.")
+    missing_reqs = []
+    if not pandas:
+        missing_reqs.append('pandas')
+    if not fastparquet:
+        missing_reqs.append('fastparquet')
+    if len(missing_reqs) > 0:
+        raise wandb.Error("Failed to save data frame. Please run 'pip install %s'" % ' '.join(missing_reqs))
 
     data_frame_id = util.generate_id()
 
@@ -230,7 +235,7 @@ def data_frame_to_json(df, run, key, step):
     # We have to call this wandb_run_id because that name is treated specially by
     # our filtering code
     df['wandb_run_id'] = pandas.Series(
-        [six.text_type(run.name)] * len(df.index), index=df.index)
+        [six.text_type(run.id)] * len(df.index), index=df.index)
 
     df['wandb_data_frame_id'] = pandas.Series(
         [six.text_type(data_frame_id)] * len(df.index), index=df.index)
@@ -989,13 +994,21 @@ class Video(BatchableMedia):
         self._height = None
         self._channels = None
         self._caption = caption
+        if self._format not in Video.EXTS:
+            raise ValueError("wandb.Video accepts %s formats" % ", ".join(Video.EXTS))
 
-        if isinstance(data_or_path, six.string_types):
+        if isinstance(data_or_path, six.BytesIO):
+            filename = os.path.join(MEDIA_TMP.name, util.generate_id() + '.'+ self._format)
+            with open(filename, "wb") as f:
+                f.write(data_or_path.read())
+            super(Video, self).__init__(filename, is_tmp=True)
+        elif isinstance(data_or_path, six.string_types):
             _, ext = os.path.splitext(data_or_path)
             ext = ext[1:].lower()
             if ext not in Video.EXTS:
                 raise ValueError("wandb.Video accepts %s formats" % ", ".join(Video.EXTS))
             super(Video, self).__init__(data_or_path, is_tmp=False)
+            #ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 data_or_path
         else:
             if hasattr(data_or_path, "numpy"): # TF data eager tensors
                 self.data = data_or_path.numpy()
@@ -1148,7 +1161,7 @@ class Image(BatchableMedia):
             self._width, self._height = self._image.size
 
             tmp_path = os.path.join(MEDIA_TMP.name, util.generate_id() + '.png')
-            self._image.save(tmp_path)
+            self._image.save(tmp_path, transparency=None)
             super(Image, self).__init__(tmp_path, is_tmp=True)
 
     @classmethod
@@ -1158,6 +1171,7 @@ class Image(BatchableMedia):
     def to_json(self, run):
         json_dict = super(Image, self).to_json(run)
         json_dict['_type'] = 'image-file'
+        json_dict['format'] = "png"
 
         if self._width is not None:
             json_dict['width'] = self._width
@@ -1235,11 +1249,11 @@ class Image(BatchableMedia):
         for i, image in enumerate(images[:num_images_to_log]):
             location = width * i
             sprite.paste(image._image, (location, 0))
-        fname = '{}_{}.jpg'.format(key, step)
+        fname = '{}_{}.png'.format(key, step)
         # fname may contain a slash so we create the directory
         util.mkdir_exists_ok(os.path.dirname(os.path.join(base, fname)))
-        sprite.save(os.path.join(base, fname), transparency=0)
-        meta = {"width": width, "height": height,
+        sprite.save(os.path.join(base, fname), transparency=None)
+        meta = {"width": width, "height": height, "format": "png",
                 "count": num_images_to_log, "_type": "images"}
         # TODO: hacky way to enable image grouping for now
         grouping = images[0]._grouping

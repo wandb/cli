@@ -768,8 +768,10 @@ class RunManager(object):
             fs_api, util.OUTPUT_FNAME, prepend_timestamp=True, line_prepend='ERROR'))
 
     def unmirror_stdout_stderr(self):
-        sys.stdout.write = sys.stdout.orig_write
-        sys.stderr.write = sys.stderr.orig_write
+        # Python 2 tests were failing...
+        if hasattr(sys.stdout, "orig_write"):
+            sys.stdout.write = sys.stdout.orig_write
+            sys.stderr.write = sys.stderr.orig_write
 
     def _get_stdout_stderr_streams(self):
         """Sets up STDOUT and STDERR streams. Only call this once."""
@@ -983,7 +985,7 @@ class RunManager(object):
                     wandb.termerror(
                         'Failed to connect to W&B. Retrying in the background.')
                     return False
-                launch_error_s = 'Launch exception: {}, see {} for details.  To disable wandb set WANDB_MODE=dryrun'.format(e, util.get_log_file_path())
+                launch_error_s = 'Launch exception: {}\nTo disable wandb syncing set WANDB_MODE=dryrun'.format(e)
 
                 raise LaunchError(launch_error_s)
 
@@ -992,11 +994,13 @@ class RunManager(object):
             wandb.termlog("{}{} {}".format("Resuming run" if self._run.resumed else "Syncing run", format_run_name(self._run), url))
             wandb.termlog("Run `wandb off` to turn off syncing.")
 
-        self._run.set_environment(environment=env)
+        env = self._run.set_environment(environment=env)
 
-        if not os.getenv(wandb_env.DISABLE_CODE):
+        if not env.get(wandb_env.DISABLE_CODE):
             logger.info("saving patches")
             self._api.save_patches(self._run.dir)
+        if env.get("SPELL_RUN_URL"):
+            self._api.sync_spell(self._run, env)
         logger.info("saving pip packages")
         self._api.save_pip(self._run.dir)
         logger.info("initializing streaming files api")
@@ -1193,8 +1197,9 @@ class RunManager(object):
                         sig = signal.CTRL_C_EVENT # pylint: disable=no-member
                     self.proc.send_signal(sig)
 
-            self._run_status_checker = RunStatusChecker(
-                self._run, self._api, stop_requested_handler=stop_handler)
+            if self._cloud:
+                self._run_status_checker = RunStatusChecker(
+                    self._run, self._api, stop_requested_handler=stop_handler)
 
         # Add a space before user output
         wandb.termlog()

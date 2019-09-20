@@ -9,6 +9,7 @@ import wandb
 import types
 import subprocess
 from wandb import env
+from wandb import util
 from wandb.meta import Meta
 from wandb.apis import InternalApi
 
@@ -32,6 +33,23 @@ def test_meta(git_repo, mocker):
     assert meta.data["username"]
     assert meta.data["os"]
 
+
+def test_anonymous_redaction(mocker):
+    mocker.patch.object(sys, 'argv', ["foo", "bar"])
+    api = InternalApi()
+    api.set_setting('anonymous', 'true')
+
+    meta = Meta(api, "wandb")
+    meta.write()
+
+    print(meta.data)
+    assert "host" not in meta.data
+    assert "username" not in meta.data
+    assert "executable" not in meta.data
+    assert "email" not in meta.data
+    assert "root" not in meta.data
+
+
 def test_disable_code(git_repo):
     os.environ[env.DISABLE_CODE] = "true"
     meta = Meta(InternalApi())
@@ -53,6 +71,7 @@ def test_colab(mocker, monkeypatch):
         assert meta.data["codeSaved"]
         assert os.path.exists("code/test.ipynb")
 
+
 def test_git_untracked_notebook_env(monkeypatch, git_repo, mocker):
     mocker.patch('wandb._get_python_type', lambda: "jupyter")
     with open("test.ipynb", "w") as f:
@@ -63,6 +82,20 @@ def test_git_untracked_notebook_env(monkeypatch, git_repo, mocker):
     assert meta.data["codeSaved"]
     assert os.path.exists("code/test.ipynb")
     os.environ[env.NOTEBOOK_NAME]
+
+
+def test_git_untracked_notebook_env_subdir(monkeypatch, git_repo, mocker):
+    mocker.patch('wandb._get_python_type', lambda: "jupyter")
+    util.mkdir_exists_ok("sub")
+    with open("sub/test.ipynb", "w") as f:
+        f.write("{}")
+    os.environ[env.NOTEBOOK_NAME] = "sub/test.ipynb"
+    meta = Meta(InternalApi())
+    assert meta.data["program"] == "sub/test.ipynb"
+    assert meta.data["codeSaved"]
+    assert os.path.exists("code/sub/test.ipynb")
+    os.environ[env.NOTEBOOK_NAME]
+
 
 def test_git_tracked_notebook_env(monkeypatch, git_repo, mocker):
     mocker.patch('wandb._get_python_type', lambda: "jupyter")
@@ -76,6 +109,7 @@ def test_git_tracked_notebook_env(monkeypatch, git_repo, mocker):
     assert not os.path.exists("code/test.ipynb")
     os.environ[env.NOTEBOOK_NAME]
 
+
 def test_meta_cuda(mocker):
     mocker.patch('wandb.meta.os.path.exists', lambda path: True)
 
@@ -86,7 +120,7 @@ def test_meta_cuda(mocker):
             return open(path, mode=mode)
     mocker.patch('wandb.meta.open', magic)
     meta = Meta(InternalApi())
-    meta.data["cuda"] == "9.0.176"
+    assert meta.data["cuda"] == "9.0.176"
 
 
 def test_meta_thread(git_repo):

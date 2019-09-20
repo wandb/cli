@@ -87,12 +87,14 @@ def vcr(vcr):
 
 @pytest.fixture
 def local_netrc(monkeypatch):
-    # TODO: this seems overkill...
-    origexpand = os.path.expanduser
+    with CliRunner().isolated_filesystem():
+        # TODO: this seems overkill...
+        origexpand = os.path.expanduser
 
-    def expand(path):
-        return os.path.realpath("netrc") if "netrc" in path else origexpand(path)
-    monkeypatch.setattr(os.path, "expanduser", expand)
+        def expand(path):
+            return os.path.realpath("netrc") if "netrc" in path else origexpand(path)
+        monkeypatch.setattr(os.path, "expanduser", expand)
+        yield
 
 
 @pytest.fixture
@@ -165,9 +167,9 @@ def wandb_init_run(request, tmpdir, request_mocker, upsert_run, query_run_resume
             orig_rm = wandb.run_manager.RunManager
             mock = mocker.patch('wandb.run_manager.RunManager')
 
-            def fake_init(run, port=None, output=None):
+            def fake_init(run, port=None, output=None, cloud=True):
                 print("Initialized fake run manager")
-                rm = fake_run_manager(mocker, run, rm_class=orig_rm)
+                rm = fake_run_manager(mocker, run, cloud=cloud, rm_class=orig_rm)
                 rm._block_file_observer()
                 run.run_manager = rm
                 return rm
@@ -296,21 +298,22 @@ def wandb_init_run(request, tmpdir, request_mocker, upsert_run, query_run_resume
         assert vars(wandb) == orig_namespace
 
 
-def fake_run_manager(mocker, run=None, rm_class=wandb.run_manager.RunManager):
+def fake_run_manager(mocker, run=None, cloud=True, rm_class=wandb.run_manager.RunManager):
     # NOTE: This will create a run directory so make sure it's called in an isolated file system
     # We have an optional rm_class object because we mock it above so we need it before it's mocked
     api = InternalApi(load_settings=False)
     api.set_setting('project', 'testing')
-    
+
     if wandb.run is None:
         wandb.run = run or Run()
+        wandb.config = wandb.run.config
     wandb.run._api = api
     wandb.run._mkdir()
     wandb.run.socket = wandb_socket.Server()
     api.set_current_run_id(wandb.run.id)
     mocker.patch('wandb.apis.internal.FileStreamApi')
     api._file_stream_api = mocker.MagicMock()
-    run_manager = rm_class(wandb.run, port=wandb.run.socket.port)
+    run_manager = rm_class(wandb.run, cloud=cloud, port=wandb.run.socket.port)
 
     class FakeProc(object):
         def poll(self):
@@ -361,10 +364,23 @@ def run_manager(mocker, request_mocker, upsert_run, query_viewer):
         wandb.uninit()
 
 
+@pytest.fixture
+def dryrun():
+    orig_environ = dict(os.environ)
+    try:
+        with CliRunner().isolated_filesystem():
+            os.environ["WANDB_MODE"] = "dryrun"
+            yield os.environ
+    finally:
+        os.environ.clear()
+        os.environ.update(orig_environ)
+        wandb.uninit()
+
 # "Error: 'Session' object has no attribute 'request'""
 # @pytest.fixture(autouse=True)
 # def no_requests(monkeypatch):
 #    monkeypatch.delattr("requests.sessions.Session.request")
+
 
 @pytest.fixture
 def request_mocker(request):
@@ -376,6 +392,15 @@ def request_mocker(request):
     m.start()
     request.addfinalizer(m.stop)
     return m
+
+
+@pytest.fixture(autouse=True)
+def clean_environ():
+    """Remove any env variables set in tests"""
+    wandb_keys = [key for key in os.environ.keys() if key.startswith(
+        'WANDB_') and key not in ['WANDB_TEST']]
+    for key in wandb_keys:
+        del os.environ[key]
 
 
 @pytest.fixture

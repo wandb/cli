@@ -18,6 +18,7 @@ from .api_mocks import *
 from .utils import runner
 import wandb
 from wandb import wandb_run
+from wandb import env
 
 # Tests which rely on row history in memory should set `History.keep_rows = True`
 from wandb.history import History
@@ -149,6 +150,49 @@ def test_custom_dir(wandb_init_run):
     assert len(glob.glob("/tmp/wandb/run-*")) > 0
 
 
+def test_login_key(local_netrc, capsys):
+    wandb.login(key="A"* 40)
+    out, err = capsys.readouterr()
+    assert "wandb: WARNING If" in err
+    assert wandb.api.api_key == "A" * 40
+
+
+def test_login_existing_key(local_netrc):
+    os.environ["WANDB_API_KEY"] = "B" * 40
+    wandb.ensure_configured()
+    wandb.login()
+    assert wandb.api.api_key == "B" * 40
+
+
+def test_login_no_key(local_netrc, mocker):
+    stdin_mock = mocker.patch("wandb.util.sys.stdin.isatty")
+    stdin_mock.return_value = True
+    stdout_mock = mocker.patch("wandb.util.sys.stdout.isatty")
+    stdout_mock.return_value = True
+    inp = mocker.patch("wandb.util.six.moves.input")
+    inp.return_value = "2"
+    getpass = mocker.patch("wandb.util.getpass.getpass")
+    getpass.return_value = "C" * 40
+
+    wandb.ensure_configured()
+    assert wandb.api.api_key == None
+    wandb.login()
+    assert wandb.api.api_key == "C" * 40
+
+
+def test_login_jupyter_anonymous(mock_server, local_netrc, mocker):
+    python = mocker.patch("wandb._get_python_type")
+    python.return_value = "ipython"
+    wandb.login(anonymous="allow")
+    assert wandb.api.api_key == "ANONYMOOSE" * 4
+
+
+def test_login_anonymous(mock_server, local_netrc):
+    os.environ["WANDB_API_KEY"] = "B" * 40
+    wandb.login(anonymous="must")
+    assert wandb.api.api_key == "ANONYMOOSE" * 4
+
+
 @pytest.mark.mock_socket
 def test_save_policy_symlink(wandb_init_run):
     with open("test.rad", "w") as f:
@@ -231,7 +275,7 @@ def test_restore(runner, wandb_init_run, request_mocker, download_url, query_run
 @pytest.mark.jupyter
 @pytest.mark.mocked_run_manager
 def test_jupyter_init(wandb_init_run):
-    assert os.getenv("WANDB_JUPYTER")
+    assert os.getenv(env.JUPYTER)
     wandb.log({"stat": 1})
     fsapi = wandb_init_run.run_manager._api._file_stream_api
     wandb_init_run._stop_jupyter_agent()
