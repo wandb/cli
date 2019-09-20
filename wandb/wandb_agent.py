@@ -9,7 +9,10 @@ import sys
 import traceback
 import time
 import signal
-import queue
+try:
+    import queue
+except ImportError:
+    import Queue as queue
 
 import six
 
@@ -38,10 +41,10 @@ class AgentProcess(object):
 
         if command:
             self._popen = subprocess.Popen(command,
-                env=env, preexec_fn=os.setpgrp)
+                                           env=env, preexec_fn=os.setpgrp)
         elif function:
             self._proc = multiprocessing.Process(target=self._start,
-                    args=(self._finished_q, env, function, run_id, in_jupyter))
+                                                 args=(self._finished_q, env, function, run_id, in_jupyter))
             self._proc.start()
         else:
             raise AgentError("Agent Process requires command or function")
@@ -67,7 +70,6 @@ class AgentProcess(object):
 
         # signal that the process is finished
         finished_q.put(True)
-
 
     def poll(self):
         if self._popen:
@@ -218,8 +220,8 @@ class Agent(object):
         logger.info('Agent starting run with config:\n' +
                     '\n'.join(['\t{}: {}'.format(k, v['value']) for k, v in command['args'].items()]))
         if self._in_jupyter:
-            print('wandb: Agent Starting Run: {} with config:\n'.format(command.get('run_id'))  +
-                    '\n'.join(['\t{}: {}'.format(k, v['value']) for k, v in command['args'].items()]))
+            print('wandb: Agent Starting Run: {} with config:\n'.format(command.get('run_id')) +
+                  '\n'.join(['\t{}: {}'.format(k, v['value']) for k, v in command['args'].items()]))
 
         run = wandb_run.Run(mode='run',
                             sweep_id=self._sweep_id,
@@ -241,7 +243,7 @@ class Agent(object):
 
         if self._function:
             proc = AgentProcess(function=self._function, env=env,
-                    run_id=command.get('run_id'), in_jupyter=self._in_jupyter)
+                                run_id=command.get('run_id'), in_jupyter=self._in_jupyter)
         else:
             command_list = ['/usr/bin/env', 'python', command['program']] + flags
             proc = AgentProcess(command=command_list, env=env)
@@ -282,6 +284,7 @@ class Agent(object):
                 # process is already dead
                 pass
         self._running = False
+
 
 class AgentApi(object):
     def __init__(self, queue):

@@ -890,7 +890,7 @@ def launch(ctx, launch_commands, backend):
     launch_commands = ['"{}"'.format(command) for command in launch_commands]
     launch_commands = "[{}]".format(", ".join(launch_commands))
     docker_template = """
-        FROM nvidia/cuda:9.0-cudnn7-runtime
+        FROM tensorflow/tensorflow:1.14.0-gpu
 
         RUN apt-get update && apt-get install -y --no-install-recommends \\
                 wget \\
@@ -947,10 +947,9 @@ def launch(ctx, launch_commands, backend):
         subprocess.check_call("docker run -it {}".format(image_id).split(' '))
         return
     elif backend == 'ai-platform':
+        # Requires python2. Add a warning or something.
         project_name = os.path.basename(os.getcwd())
         gcp_project_name = subprocess.check_output('gcloud config list project --format value(core.project)'.split(' ')).rstrip()
-        image_id = str(image_id, 'utf-8')
-        image_id = image_id.decode() if isinstance(image_id, bytes) else image_id
         image_name = 'gcr.io/{gcp_project_name}/{project_name}_container:{project_name}'.format(gcp_project_name=gcp_project_name, project_name=project_name)
         docker_cmd = 'docker build -t {} .'.format(image_name)
         run_cmd(docker_cmd)
