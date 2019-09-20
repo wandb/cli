@@ -9,12 +9,8 @@ import sys
 import traceback
 import time
 import signal
-try:
-    import queue
-except ImportError:
-    import Queue as queue
-
 import six
+from six.moves import queue
 
 import wandb
 from wandb.apis import InternalApi
