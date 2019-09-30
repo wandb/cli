@@ -126,7 +126,11 @@ class JupyterAgent(object):
             # Init will return the last step of a resumed run
             # we update the runs history._steps in extreme hack fashion
             # TODO: this reserves a bigtime refactor
-            new_step = self.rm.init_run(dict(os.environ))
+            try:
+                new_step = self.rm.init_run(dict(os.environ))
+            # TODO: zack was seeing a broken pipe error for reasons not clear, so catching for now
+            except BrokenPipeError:
+                new_step = None
             if new_step:
                 wandb.run.history._steps = new_step + 1
 

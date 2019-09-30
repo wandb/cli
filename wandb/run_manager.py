@@ -1030,6 +1030,7 @@ class RunManager(object):
 
         if self._cloud:
             logger.info("stopping streaming files and file change observer")
+            #TODO: Sometimes the syncing thread hasn't been started
             self._end_file_syncing(exitcode)
 
         self._run.history.close()

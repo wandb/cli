@@ -228,4 +228,6 @@ class FileStreamApi(object):
             exitcode: The exitcode of the watched process.
         """
         self._queue.put(self.Finish(exitcode))
-        self._thread.join()
+        #TODO: because run_manager.shutdown is called on cell end in jupyter, sometimes we're not started.
+        if self._thread.is_alive():
+            self._thread.join()
