@@ -1,6 +1,8 @@
 from functools import wraps
 import json
 import sys
+import uuid
+import os
 
 CODE = {
     "default": """<>
@@ -25,55 +27,44 @@ CODE = {
 class Inference(object):
     def render(self, content, mimetype="html"):
         import IPython
-        #from google.colab import output
         display(IPython.display.HTML(content))
 
-    def __call__(self, inp, out, options={}):
-        template = "default"
-        if "image" in inp:
-            if options.get("webcam"):
-                template = "webcam"
-            elif options.get("canvas"):
-                template = "draw"
-            else:
-                template = "image"
-        elif "audio" in inp:
-            template = "audio"
-        elif "text" in inp:
-            template = "text"
-        self.render('''
-            <div id="root"></div>
-            <script type="text/javascript">
-            const host = "%s"
-            window.initialScope = %s
-            document.head.innerHTML = document.head.innerHTML + "<base href='" + host + "' />";
-            const body = fetch(host+"/asset-manifest.json").then((a) => a.json().then(j => j));
-            function load(url, type='js') {
-                const promise = new Promise((resolve, reject) => {
-                    const node = document.createElement(type === 'css' ? 'link' : 'script');
-                    if(type === 'css') {
-                        node.href = value
-                        node.rel = 'stylesheet'
-                    } else {
-                        node.src = value
-                    }
-                    node.onload = resolve;
-                    node.onerror = reject;
-                    document.head.appendChild(node);
-                });
-                return promise
-            }
-            for (let [key, value] of Object.entries(body)) {
-                if(key.endsWith('js')) {
-                    load(value)
-                } else if(key.endsWith('css')) {
-                    load(value, 'css')
-                }
-            }
-            </script>
-            ''' % ("https://cocky-kowalevski-373523.netlify.com", json.dumps({"code": CODE[template]})))
+    def template(self, code, callbacks=[], host=None):
+        template = open(os.path.join(os.path.dirname(__file__), "template.js"), "r").read()
+        template = template.replace("\"__WANDB__\"", json.dumps({"code": code, "callbacks": callbacks}))
+        template = template.replace("__HOST__", os.environ.get(
+            "WANDB_UI_URL", host or "https://cocky-kowalevski-373523.netlify.com"))
+        return template
 
+    def __call__(self, inp, out, options={}):
         def wrap(f):
+            template = "default"
+            if "image" in inp:
+                if options.get("webcam"):
+                    template = "webcam"
+                elif options.get("canvas"):
+                    template = "draw"
+                else:
+                    template = "image"
+            elif "audio" in inp:
+                template = "audio"
+            elif "text" in inp:
+                template = "text"
+            callbacks = []
+            try:
+                from google.colab import output
+                callback = "wb_"+str(uuid.uuid4())
+                output.register_callback(callback, f)
+                callbacks.append(callback)
+            except ImportError:
+                pass
+            self.render('''
+                <div id="root"></div>
+                <script type="text/javascript">
+                    %s
+                </script>
+                ''' % self.template(CODE[template]), callbacks)
+
             @wraps(f)
             def wrapper(*args, **kwargs):
                 return f(inp, out, *args, **kwargs)
