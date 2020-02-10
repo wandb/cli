@@ -1183,32 +1183,29 @@ class RunManager(object):
             self._user_file_policies[policy["policy"]].append(policy["glob"])
 
     def start_tensorboard_watcher(self, logdir, save=True):
-        try:
-            from wandb.tensorboard.watcher import Watcher, Consumer
-            dirs = [logdir] + [w.logdir for w in self._tensorboard_watchers]
-            rootdir = os.path.dirname(os.path.commonprefix(dirs))
-            if os.path.isfile(logdir):
-                filename = os.path.basename(logdir)
-            else:
-                filename = ""
-            # Tensorboard loads all tfevents files in a directory and prepends
-            # their values with the path.  Passing namespace to log allows us
-            # to nest the values in wandb
-            namespace = logdir.replace(filename, "").replace(
-                rootdir, "").strip(os.sep)
-            # TODO: revisit this heuristic, it exists because we don't know the
-            # root log directory until more than one tfevents file is written to
-            if len(dirs) == 1 and namespace not in ["train", "validation"]:
-                namespace = None
-            with self._tensorboard_lock:
-                self._tensorboard_watchers.append(Watcher(logdir, self._watcher_queue, namespace=namespace, save=save))
-                if self._tensorboard_consumer is None:
-                    self._tensorboard_consumer = Consumer(self._watcher_queue)
-                    self._tensorboard_consumer.start()
-            self._tensorboard_watchers[-1].start()
-            return self._tensorboard_watchers
-        except ImportError:
-            wandb.termerror("Couldn't import tensorboard, not streaming events. Run `pip install tensorboard`")
+        from wandb.tensorboard.watcher import Watcher, Consumer
+        dirs = [logdir] + [w.logdir for w in self._tensorboard_watchers]
+        rootdir = os.path.dirname(os.path.commonprefix(dirs))
+        if os.path.isfile(logdir):
+            filename = os.path.basename(logdir)
+        else:
+            filename = ""
+        # Tensorboard loads all tfevents files in a directory and prepends
+        # their values with the path.  Passing namespace to log allows us
+        # to nest the values in wandb
+        namespace = logdir.replace(filename, "").replace(
+            rootdir, "").strip(os.sep)
+        # TODO: revisit this heuristic, it exists because we don't know the
+        # root log directory until more than one tfevents file is written to
+        if len(dirs) == 1 and namespace not in ["train", "validation"]:
+            namespace = None
+        with self._tensorboard_lock:
+            self._tensorboard_watchers.append(Watcher(logdir, self._watcher_queue, namespace=namespace, save=save))
+            if self._tensorboard_consumer is None:
+                self._tensorboard_consumer = Consumer(self._watcher_queue)
+                self._tensorboard_consumer.start()
+        self._tensorboard_watchers[-1].start()
+        return self._tensorboard_watchers
 
 
     def _sync_etc(self, headless=False):
