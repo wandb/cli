@@ -716,3 +716,644 @@ plot_decision_boundaries
   ]
 }
 '''
+
+'''
+--------------------------- V2 - Multiple Runs ---------------------------
+plot_calibration_curve
+    {
+      "$schema": "https://vega.github.io/schema/vega-lite/v4.json",
+      "padding": 5,
+      "data":
+        {
+          "name": "${history-table:rows:x-axis,key}"
+        },
+      "title": "Calibration Curve",
+      "vconcat": [
+        {
+          "layer": [
+          {
+            "encoding": {
+              "x": {"field": "mean_predicted_value", "type": "quantitative", "axis": {"title": "Mean predicted value"}},
+              "y": {"field": "fraction_of_positives", "type": "quantitative", "axis": {"title": "Fraction of positives"}},
+              "opacity": {"value": 0.5},
+              "strokeDash": {
+                "field": "model",
+                "type": "nominal",
+                "legend": {"title": "Model"}
+              },
+              "color": {
+                "field": "runID",
+                "type": "nominal",
+                "legend": {"title": "Run Name"}
+              }
+            },
+            "layer": [
+              {
+                "mark": {
+                  "type": "line",
+                  "point": {
+                    "filled": false,
+                    "fill": "white"
+                  }
+                }
+              }
+            ]
+          }]
+        },
+        {
+        "mark": {"type": "tick"},
+        "encoding": {
+          "x": {"field": "edge_dict", "type": "quantitative","bin":true, "axis": {"title": "Mean predicted value"}},
+          "y": {"field": "hist_dict", "type": "quantitative", "axis": {"title": "Counts"}},
+          "strokeWidth": {
+            "value": 2
+          },
+          "color": {
+            "field": "runID",
+            "type": "nominal"
+          }
+        }
+        }
+      ]
+    }
+
+plot_elbow_plot
+{
+      "$schema": "https://vega.github.io/schema/vega-lite/v4.json",
+      "description": "A dual axis chart, created by setting y's scale resolution to `\"independent\"`",
+      "width": 400, "height": 300,
+      "data": {
+        "name": "${history-table:rows:x-axis,key}"
+      },
+      "title": "Elbow Plot - Errors vs Cluster Size",
+      "encoding": {
+        "x": {
+            "field": "cluster_ranges",
+            "bin": true,
+            "axis": {"title": "Number of Clusters"},
+            "type": "quantitative"
+        },
+        "color": {
+          "field": "runID",
+          "type": "nominal",
+          "legend": {"title": "Run Name"}
+        }
+      },
+      "layer": [
+        {
+          "mark": {"opacity": 0.5, "type": "line"},
+          "encoding": {
+            "y": {
+              "field": "errors",
+              "type": "quantitative",
+              "axis": {"title": "Sum of Squared Errors"}
+            },
+            "strokeWidth": {
+              "value": 2
+            },
+            "color": {
+              "field": "runID",
+              "type": "nominal",
+            "legend": {"title": "Run Name"}
+            }
+          }
+        },
+        {
+          "mark": {"opacity": 0.3, "strokeDash": [6, 4], "type": "line"},
+          "encoding": {
+            "y": {
+              "field": "clustering_time",
+              "type": "quantitative",
+              "axis": {"title": "Clustering Time"}
+            },
+            "strokeWidth": {
+              "value": 2
+            },
+            "color": {
+              "field": "runID",
+              "type": "nominal"
+            }
+          }
+        }
+      ],
+      "resolve": {"scale": {"y": "independent"}}
+}
+
+plot_learning_curve
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v4.json",
+  "padding": 5,
+  "width": "500",
+  "height": "500",
+  "data":
+    {
+      "name": "${history-table:rows:x-axis,key}"
+    },
+    "title": {
+      "text": "Learning Curve"
+    },
+  "layer": [
+    {
+      "encoding": {
+        "x": {"field": "train_size", "type": "quantitative"},
+        "y": {"field": "score", "type": "quantitative"},
+        "opacity": {"value": 0.5},
+        "strokeDash": {
+          "field": "dataset",
+          "type": "nominal",
+          "legend": {"title": "Dataset"}
+        },
+        "color": {
+          "field": "runID",
+          "type": "nominal",
+        "legend": {"title": "Run Name"}
+        }
+      },
+      "layer": [
+        {"mark": "line"},
+        {
+          "selection": {
+            "label": {
+              "type": "single",
+              "nearest": true,
+              "on": "mouseover",
+              "encodings": ["x"],
+              "empty": "none"
+            }
+          },
+          "mark": "point",
+          "encoding": {
+            "opacity": {
+              "condition": {"selection": "label", "value": 1},
+              "value": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "transform": [{"filter": {"selection": "label"}}],
+      "layer": [
+        {
+          "mark": {"type": "rule", "color": "gray"},
+          "encoding": {
+            "x": {"type": "quantitative", "field": "train_size"}
+          }
+        },
+        {
+          "encoding": {
+            "text": {"type": "quantitative", "field": "score"},
+            "x": {"type": "quantitative", "field": "train_size"},
+            "y": {"type": "quantitative", "field": "score"}
+          },
+          "layer": [
+            {
+              "mark": {
+                "type": "text",
+                "stroke": "white",
+                "strokeWidth": 2,
+                "align": "left",
+                "dx": 5,
+                "dy": -5
+              }
+            },
+            {
+              "mark": {"type": "text", "align": "left", "dx": 5, "dy": -5},
+              "encoding": {
+                "color": {
+                  "type": "nominal", "field": "runID"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+
+plot_roc
+{
+    "$schema": "https://vega.github.io/schema/vega-lite/v4.json",
+    "padding": 5,
+    "width": "500",
+    "height": "500",
+    "data":
+      {
+        "name": "${history-table:rows:x-axis,key}"
+      },
+    "title": {
+      "text": "ROC Curve"
+    },"layer": [
+      {
+        "encoding": {
+          "x": {"field": "fpr", "type": "quantitative", "axis": {"title": "False Positive Rate"}},
+          "y": {"field": "tpr", "type": "quantitative", "axis": {"title": "True Positive Rate"}},
+          "opacity": {"value": 0.5},
+          "strokeDash": {
+            "field": "class",
+            "type": "nominal",
+            "legend": {"title": "Class"}
+          },
+          "color": {
+            "field": "runID",
+            "type": "nominal",
+            "legend": {"title": "Run Name"}
+          }
+        },
+        "layer": [
+          {"mark": "line"},
+          {
+            "selection": {
+              "label": {
+                "type": "single",
+                "nearest": true,
+                "on": "mouseover",
+                "encodings": ["x"],
+                "empty": "none"
+              }
+            },
+            "mark": "point",
+            "encoding": {
+              "opacity": {
+                "condition": {"selection": "label", "value": 1},
+                "value": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "transform": [{"filter": {"selection": "label"}}],
+        "layer": [
+          {
+            "mark": {"type": "rule", "color": "gray"},
+            "encoding": {
+              "x": {"type": "quantitative", "field": "train_size"}
+            }
+          },
+          {
+            "encoding": {
+              "text": {"type": "quantitative", "field": "fpr"},
+              "x": {"type": "quantitative", "field": "fpr"}
+            },
+            "layer": [
+              {
+                "mark": {
+                  "type": "text",
+                  "stroke": "white",
+                  "strokeWidth": 2,
+                  "align": "left",
+                  "dx": 5,
+                  "dy": -5
+                }
+              },
+              {
+                "mark": {"type": "text", "align": "left", "dx": 5, "dy": -5},
+                "encoding": {
+                  "color": {
+                    "type": "nominal", "field": "runID"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+}
+
+plot_precision_recall
+{
+    "$schema": "https://vega.github.io/schema/vega-lite/v4.json",
+    "padding": 5,
+    "width": 500,
+    "height": 500,
+    "data":
+      {
+        "name": "${history-table:rows:x-axis,key}"
+      },
+    "title": {
+      "text": "Precision Recall"
+    },"layer": [
+      {
+        "encoding": {
+          "x": {"field": "precision", "type": "quantitative"},
+          "y": {"field": "recall", "type": "quantitative"},
+          "opacity": {"value": 0.5},
+          "strokeDash": {
+            "field": "class",
+            "type": "nominal",
+            "legend": {"title": "Class"}
+          },
+          "color": {
+            "field": "runID",
+            "type": "nominal",
+            "legend": {"title": "Run Name"}
+          }
+        },
+        "layer": [
+          {"mark": "line"},
+          {
+            "selection": {
+              "label": {
+                "type": "single",
+                "nearest": true,
+                "on": "mouseover",
+                "encodings": ["x"],
+                "empty": "none"
+              }
+            },
+            "mark": "point",
+            "encoding": {
+              "opacity": {
+                "condition": {"selection": "label", "value": 1},
+                "value": 0
+              }
+            }
+          }
+        ]
+      },
+      {
+        "transform": [{"filter": {"selection": "label"}}],
+        "layer": [
+          {
+            "encoding": {
+              "text": {"type": "nominal", "field": "class"},
+              "x": {"type": "quantitative", "field": "precision"},
+              "y": {"type": "quantitative", "field": "recall"}
+            },
+            "layer": [
+              {
+                "mark": {
+                  "type": "text",
+                  "stroke": "white",
+                  "strokeWidth": 2,
+                  "align": "left",
+                  "dx": 5,
+                  "dy": -5
+                }
+              },
+              {
+                "mark": {"type": "text", "align": "left", "dx": 5, "dy": -5},
+                "encoding": {
+                  "color": {
+                    "type": "nominal", "field": "runID"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+}
+
+plot_class_balance
+{
+      "$schema": "https://vega.github.io/schema/vega-lite/v4.json",
+      "width": 500,
+      "height": 500,
+      "title": "Class Proportions in Target Variable",
+      "data": {
+        "name": "${history-table:rows:x-axis,key}"
+      },
+      "mark": {
+        "type": "bar",
+        "stroke": "black",
+        "cursor": "pointer"
+      },
+      "encoding": {
+        "x": {"field": "class", "type": "ordinal", "axis": {"title": "Class"}},
+        "y": {"field": "count", "type": "quantitative", "axis": {"title": "Number of instances"}},
+        "opacity": {
+          "field": "dataset",
+          "type": "nominal",
+          "scale": {
+            "domain": ["train", "test"],
+            "range": [0.9, 0.7]
+          },
+          "legend": {"title": "Dataset"}
+          },
+        "color": {
+          "field": "runID",
+          "type": "nominal",
+          "legend": {"title": "Run Name"}
+        },
+        "strokeWidth": {
+          "value": 0
+        }
+      },
+      "config": {
+        "scale": {
+          "bandPaddingInner": 0.2
+        }
+      }
+    }
+
+plot_summary_metric
+{
+      "$schema": "https://vega.github.io/schema/vega-lite/v4.json",
+      "data": {
+        "name": "${history-table:rows:x-axis,key}"
+      },
+      "title": "Summary Metrics",
+      "encoding": {
+        "y": {"field": "metric_name", "type": "nominal"},
+        "x": {"field": "metric_value", "type": "quantitative"},
+        "color": {
+          "field": "runID",
+          "type": "nominal",
+          "legend": {"title": "Run Name"}
+        },
+        "opacity": {"value": 0.8}
+      },
+      "layer": [{ "mark": "bar" }]
+    }
+
+plot_feature_importances
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v4.json",
+  "data": {
+    "name": "${history-table:rows:x-axis,key}"
+  },
+  "title": "Feature Importances",
+  "mark": "bar",
+  "encoding": {
+    "y": {"field": "feature_names", "type": "nominal", "axis": {"title":"Features"},"sort": "-x"},
+    "x": {"field": "importances", "type": "quantitative", "axis": {"title":"Importances"}},
+    "opacity": {"value": 0.9},
+    "color": {
+      "field": "runID",
+      "type": "nominal",
+      "legend": {"title": "Run Name"}
+    }
+  }
+}
+
+plot_confusion_matrix
+{
+    "$schema": "https://vega.github.io/schema/vega-lite/v4.json",
+    "padding": 5,
+    "width": 500,
+    "height": 500,
+    "data":
+      {
+        "name": "${history-table:rows:x-axis,key}"
+      },
+    "title": {
+      "text": "Confusion Matrix"
+    },
+      "mark": "circle",
+    "encoding": {
+      "x": {
+        "field": "Predicted",
+        "type": "nominal",
+        "axis": {
+          "maxExtent": 50,
+          "labelLimit": 40,
+          "labelAngle": -45
+        }
+      },
+      "y": {
+        "field": "Actual",
+        "type": "nominal"
+
+      },
+      "size": {
+        "field": "Count",
+        "type": "quantitative"
+      },
+      "color": {
+        "field": "runID",
+        "type": "nominal"
+      },
+      "opacity": {"value": 0.4}
+    }
+}
+
+plot_outlier_candidates
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v4.json",
+  "padding": 5,
+  "data":
+    {
+      "name": "${history-table:rows:x-axis,key}"
+    },
+  "title": {
+    "text": "Cook's Distance Outlier Detection"
+  },
+  "layer": [{
+    "mark": "bar",
+    "encoding": {
+      "x": {
+        "field": "instance_indicies",
+        "type": "quantitative",
+        "axis": {"title": "Instances"}
+      },
+      "y": {
+        "field": "distance",
+        "type": "quantitative",
+        "axis": {"title": "Influence (Cook's Distance)"}
+      },
+      "opacity":  {"value": 0.5},
+      "color": {
+        "field": "runID",
+        "type": "nominal",
+        "legend": {"title": "Run Name"}
+      }
+    }
+  },{
+    "mark": {
+      "type":"rule",
+      "strokeDash": [6, 4],
+      "stroke":"#f88c99"},
+    "encoding": {
+      "y": {
+        "field": "influence_threshold",
+        "type": "quantitative"
+      },
+      "color": {"value": "red"},
+      "size": {"value": 1}
+    }
+  }, {
+    "mark": {
+      "type": "text",
+      "align": "left",
+      "baseline": "top",
+      "dx": 0
+    }
+  }]
+}
+
+plot_residuals
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v4.json",
+  "width": "container",
+  "data":
+    {
+      "name": "${history-table:rows:x-axis,key}"
+    },
+  "title": "Residuals Plot",
+  "vconcat": [
+    {
+      "layer": [
+      {
+        "encoding": {
+          "y": {"field": "y_pred", "type": "quantitative", "axis": {"title": "Predicted Value"}},
+          "x": {"field": "residuals", "type": "quantitative", "axis": {"title": "Residuals"}},
+          "opacity": {
+            "field": "dataset",
+            "type": "nominal",
+            "scale": {
+              "domain": ["train", "test"],
+              "range": [0.9, 0.4]
+            },
+            "legend": {"title": "Dataset"}
+          },
+          "color": {
+            "field": "runID",
+            "type": "nominal",
+            "legend": {"title": "Run Name"}
+          }
+        },
+        "layer": [
+          {
+            "mark": {
+              "type": "point",
+              "opacity": 0.5,
+              "filled" : true
+            }
+          }
+        ]
+      }]
+    },
+    {
+    "mark": {"type": "bar",
+            "opacity": 0.8},
+    "encoding": {
+      "x": {"field": "residuals", "type": "quantitative", "bin": true, "axis": {"title": "Residuals"}},
+      "y": {
+        "aggregate": "count", "field": "residuals", "type": "quantitative", "axis": {"title": "Distribution"}},
+      "strokeWidth": {
+        "value": 1
+      },
+      "opacity": {
+        "field": "dataset",
+        "type": "nominal",
+        "scale": {
+          "domain": ["train", "test"],
+          "range": [0.9, 0.4]
+        },
+        "legend": {"title": "Dataset"}
+      },
+      "color": {
+        "field": "runID",
+        "type": "nominal",
+        "legend": {"title": "Run Name"}
+      }
+    }
+    }
+  ]
+}
+'''
