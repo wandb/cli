@@ -139,7 +139,7 @@ class LocalArtifactManifestV1(object):
 
 
 class WriteableArtifact(object):
-    """An artifact object you can write files into, and pass to log_artifact."""
+    """An artifact object you can write files into, and pass to log_artifact or use_artifact."""
 
     def __init__(self, type=None, description=None, metadata=None):
         self._cache = artifacts_cache.get_artifacts_cache()

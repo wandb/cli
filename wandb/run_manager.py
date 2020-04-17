@@ -1191,14 +1191,19 @@ class RunManager(object):
                     del self._file_event_handlers[save_name]
             self._user_file_policies[policy["policy"]].append(policy["glob"])
     
-    # def use_artifact(self, message):
-    #     # NOTE: This is currently disabled, we don't automatically save used artifacts
-    #     name = message['name']
-    #     path = message['path']
-    #     la = LocalArtifact(self._api, path,
-    #                                 file_pusher=self._file_pusher, is_user_created=True)
-    #     server_artifact = la.save(name)
-    #     self._api.use_artifact(server_artifact['id'])
+    def use_artifact(self, message):
+        type = message['type']
+        name = message['name']
+        manifest_entries = message['manifest_entries']
+        description = message['description']
+        digest = message['digest']
+        labels = json.dumps(message['labels']) if 'labels' in message else None
+        metadata = message['metadata'] if 'metadata' in message else None
+        aliases = message['aliases'] if 'aliases' in message else None
+        la = LocalArtifact(self._api, digest, manifest_entries,
+                                    file_pusher=self._file_pusher, is_user_created=True)
+        server_artifact = la.save(type, name, description=description, metadata=metadata, aliases=aliases, labels=labels)
+        self._api.use_artifact(server_artifact['id'])
 
     def log_artifact(self, message):
         type = message['type']

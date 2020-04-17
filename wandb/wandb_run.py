@@ -415,15 +415,30 @@ class Run(object):
     #             'use_artifact': {
     #                 'name': name,
     #                 'path': path,
+    
     #             }
     #         })
     #         return user_artifact
     #     # TODO
     #     raise ValueError('Invalid use artifact call')
 
-    def use_artifact(self, type=None, name=None, api=None):
+    def use_artifact(self, type=None, name=None, api=None, aliases=None, artifact=None, metadata=None):
         if type is None or name is None:
             raise ValueError('type and name required')
+        if name is not None and artifact is not None:
+            type, metadata, manifest = self._prepare_artifact(artifact, type, metadata)
+            self.send_message({
+                'use_artifact': {
+                    'type': type,
+                    'name': name,
+                    'manifest_entries': manifest.entries,
+                    'digest': manifest.digest,
+                    'description': description,
+                    'metadata': metadata,
+                    'aliases': aliases
+                }
+            })
+            return artifact
         api = api or self.api
         public_api = PublicApi()
         artifact = public_api.artifact(type=type, name=name)
@@ -437,26 +452,7 @@ class Run(object):
         if isinstance(artifact, artifacts.WriteableArtifact):
             if paths is not None:
                 raise ValueError('Passing paths to log_artifact is invalid when also passing artifact')
-            type = artifact.type or type
-            metadata = artifact.metadata or metadata
-            manifest = artifact.manifest
-
-            # move artifact files into cache
-            final_artifact_dir = artifact._cache.get_artifact_dir(type, manifest.digest)
-            shutil.rmtree(final_artifact_dir)
-            os.rename(artifact.artifact_dir, final_artifact_dir)
-            # update the manifest
-            manifest.move(artifact.artifact_dir, final_artifact_dir)
-
-            # move external files into cache if there are any
-            if len(os.listdir(artifact.external_data_dir)) > 0:
-                final_external_data_dir = artifact._cache.get_artifact_external_dir(
-                        artifact.type, manifest.digest)
-                shutil.rmtree(final_external_data_dir)
-                os.rename(
-                    artifact.artifact_dir,
-                    final_external_data_dir)
-
+            type, metadata, manifest = self._prepare_artifact(artifact, type, metadata)
         elif artifact is not None:
             raise ValueError('artifact must be an instance of wandb.WriteableArtifact')
         else:
@@ -480,6 +476,29 @@ class Run(object):
                 'aliases': aliases
             }
         })
+
+    def _prepare_artifact(artifact, type=None, metadata=None):
+        type = artifact.type or type
+        metadata = artifact.metadata or metadata
+        manifest = artifact.manifest
+
+        # move artifact files into cache
+        final_artifact_dir = artifact._cache.get_artifact_dir(type, manifest.digest)
+        shutil.rmtree(final_artifact_dir)
+        # os.rename fails if tmpdir is on a different disk 
+        shutil.move(artifact.artifact_dir, final_artifact_dir)
+        # update the manifest
+        manifest.move(artifact.artifact_dir, final_artifact_dir)
+
+        # move external files into cache if there are any
+        if len(os.listdir(artifact.external_data_dir)) > 0:
+            final_external_data_dir = artifact._cache.get_artifact_external_dir(
+                    artifact.type, manifest.digest)
+            shutil.rmtree(final_external_data_dir)
+            os.rename(
+                artifact.artifact_dir,
+                final_external_data_dir)
+        return type, metadata, manifest
 
     def set_environment(self, environment=None):
         """Set environment variables needed to reconstruct this object inside
