@@ -30,6 +30,7 @@ twine==1.11.0
 numpy==1.16.0
 h5py==2.8.0
 pandas==0.25.3
+pandas==0.24.2; python_versions < '3.5'
 soundfile==0.10.2
 moviepy==1.0.0
 imageio==2.5.0
