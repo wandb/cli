@@ -9,6 +9,7 @@ Manage wandb run.
 from __future__ import print_function
 
 import atexit
+import builtins
 import collections
 import glob
 import json
@@ -1128,14 +1129,14 @@ class Run(RunBase):
             self._on_finish()
         except KeyboardInterrupt:
             wandb.termerror("Control-C detected -- Run data was not synced")
-            exit(-1)
+            builtins.exit(-1)
         except Exception as e:
             self._console_stop()
             self._backend.cleanup()
             logger.error("Problem finishing run", exc_info=e)
             wandb.termerror("Problem finishing run")
             traceback.print_exception(*sys.exc_info())
-            exit(-1)
+            builtins.exit(-1)
         self._on_final()
 
     def _console_start(self):
