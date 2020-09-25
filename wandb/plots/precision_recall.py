@@ -85,9 +85,8 @@ def precision_recall(y_true=None, y_probas=None, labels=None,
                     if count >= chart_limit:
                         wandb.termwarn("wandb uses only the first %d datapoints to create the plots."% wandb.Table.MAX_ROWS)
                         break
-            return wandb.visualize(
-                'wandb/pr_curve/v1', wandb.Table(
-                columns=['class', 'precision', 'recall'],
-                data=data
-            ))
+            table = wandb.Table(data=data, columns=["class_name", "precision", "recall"])
+            fields = {"fieldSettings" : {"class_name" : "class_name", "recall" : "recall", "precision" : "precision"}}
+            return wandb.log({
+                'pr-curve' : wandb.run.plot_table("builtin:precision-recall", "precision_recall", table,  fields)})
         return pr_table(pr_curves)

@@ -63,9 +63,7 @@ def roc(y_true=None, y_probas=None, labels=None,
                             if count >= chart_limit:
                                 wandb.termwarn("wandb uses only the first %d datapoints to create the plots."% wandb.Table.MAX_ROWS)
                                 break
-                return wandb.visualize(
-                    'wandb/roc/v1', wandb.Table(
-                    columns=['class', 'fpr', 'tpr'],
-                    data=data
-                ))
-            return roc_table(fpr_dict, tpr_dict, classes, indices_to_plot)
+                table = wandb.Table(data=data, columns=["class_name", "fpr", "tpr"])
+                fields = {"fieldSettings" : {"class_name" : "class_name", "fpr" : "fpr", "tpr" : "tpr"}}
+                return wandb.log({'roc-curve' : wandb.run.plot_table("builtin:roc-curve", "roc", table,  fields)})
+        return roc_table(fpr_dict, tpr_dict, classes, indices_to_plot)

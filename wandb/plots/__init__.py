@@ -1,3 +1,4 @@
+from wandb.plots.composite_histogram import class_distributions, multi_histogram
 from wandb.plots.roc import roc as ROC
 from wandb.plots.precision_recall import precision_recall
 from wandb.plots.heatmap import heatmap as HeatMap
