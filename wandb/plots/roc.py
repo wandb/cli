@@ -65,5 +65,5 @@ def roc(y_true=None, y_probas=None, labels=None,
                                 break
                 table = wandb.Table(data=data, columns=["class_name", "fpr", "tpr"])
                 fields = {"fieldSettings" : {"class_name" : "class_name", "fpr" : "fpr", "tpr" : "tpr"}}
-                return wandb.log({'roc-curve' : wandb.run.plot_table("builtin:roc-curve", "roc", table,  fields)})
+                return wandb.log({'roc_curve' : wandb.plot_table("builtin:roc-curve", "roc_curve", table,  fields)})
         return roc_table(fpr_dict, tpr_dict, classes, indices_to_plot)

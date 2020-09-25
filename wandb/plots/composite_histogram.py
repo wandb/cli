@@ -56,7 +56,7 @@ def class_distributions(y_probas=None, labels=None, classes_to_plot=None):
         table = wandb.Table(data=data, columns=["red_bins", "blue_bins"])
         fields = {"fieldSettings" : {"red_bins" : "red_bins", "blue_bins": "blue_bins"}}
         return wandb.log({
-                'class_distribution' : wandb.run.plot_table("builtin:multi-histogram", "class_compare", table,  fields)})
+                'class_distribution' : wandb.plot_table("builtin:multi-histogram", "class_compare", table,  fields)})
 
 def multi_histogram(red_bins, blue_bins):
     """
@@ -69,7 +69,7 @@ def multi_histogram(red_bins, blue_bins):
     table = wandb.Table(data=data, columns=["red_bins", "blue_bins"])
     fields = {"fieldSettings" : {"red_bins" : "red_bins", "blue_bins": "blue_bins"}}
     return wandb.log({
-                'multi_histogram' : wandb.run.plot_table("builtin:multi-histogram", "multi_histogram", table,  fields)})
+                'multi_histogram' : wandb.plot_table("builtin:multi-histogram", "multi_histogram", table,  fields)})
 
 
 

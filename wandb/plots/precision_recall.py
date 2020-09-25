@@ -88,5 +88,5 @@ def precision_recall(y_true=None, y_probas=None, labels=None,
             table = wandb.Table(data=data, columns=["class_name", "precision", "recall"])
             fields = {"fieldSettings" : {"class_name" : "class_name", "recall" : "recall", "precision" : "precision"}}
             return wandb.log({
-                'pr-curve' : wandb.run.plot_table("builtin:precision-recall", "precision_recall", table,  fields)})
+                'precision_recall' : wandb.plot_table("builtin:precision-recall", "precision_recall", table,  fields)})
         return pr_table(pr_curves)
