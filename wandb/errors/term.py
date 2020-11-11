@@ -83,6 +83,7 @@ def _log(
     # Repeated line tracking limited to 1k messages
     if len(PRINTED_MESSAGES) < 1000:
         PRINTED_MESSAGES.add(line)
+    line = line.encode('utf-8')
     if silent:
         if level == logging.ERROR:
             _logger.error(line)
