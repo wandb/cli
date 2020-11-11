@@ -83,7 +83,7 @@ def _log(
     # Repeated line tracking limited to 1k messages
     if len(PRINTED_MESSAGES) < 1000:
         PRINTED_MESSAGES.add(line)
-    line = line.encode('utf-8')
+    line = _to_bytes(line)
     if silent:
         if level == logging.ERROR:
             _logger.error(line)
@@ -93,3 +93,12 @@ def _log(
             _logger.info(line)
     else:
         click.echo(line, file=sys.stderr, nl=newline)
+
+
+def _to_bytes(line):
+    if isinstance(line, str):
+        return line.encode('ascii')
+    else:
+        return line.encode('utf-8')
+
+
