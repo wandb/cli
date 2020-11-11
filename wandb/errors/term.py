@@ -97,8 +97,6 @@ def _log(
 
 def _to_bytes(line):
     if isinstance(line, str):
-        return line.encode('ascii')
+        return line.encode("ascii")
     else:
-        return line.encode('utf-8')
-
-
+        return line.encode("utf-8")
