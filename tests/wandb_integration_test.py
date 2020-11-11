@@ -333,7 +333,7 @@ def test_version_yanked(
     run = wandb.init()
     run.finish()
     captured = capsys.readouterr()
-    assert "WARNING wandb version 0.10.0 has been recalled" in captured.err
+    assert "wandb version 0.10.0 has been recalled" in captured.err
 
 
 def test_version_retired(
@@ -343,4 +343,4 @@ def test_version_retired(
     run = wandb.init()
     run.finish()
     captured = capsys.readouterr()
-    assert "ERROR wandb version 0.9.99 has been retired" in captured.err
+    assert "wandb version 0.9.99 has been retired" in captured.err

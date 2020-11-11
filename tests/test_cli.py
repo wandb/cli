@@ -702,7 +702,7 @@ def test_restore_no_remote(runner, mock_server, git_repo, docker, monkeypatch):
     print(result.output)
     print(traceback.print_tb(result.exc_info[2]))
     assert result.exit_code == 0
-    assert "Created branch wandb/abcdef" in result.output
+    assert "Created branch" in result.output and "wandb/abcdef" in result.output
     assert "Applied patch" in result.output
     assert "Restored config variables to " in result.output
     assert "Launching docker container" in result.output
@@ -762,7 +762,7 @@ def test_restore_good_remote(runner, mock_server, git_repo, docker, monkeypatch)
     print(result.output)
     print(traceback.print_tb(result.exc_info[2]))
     assert result.exit_code == 0
-    assert "Created branch wandb/abcdef" in result.output
+    assert "Created branch" in result.output and "wandb/abcdef" in result.output
 
 
 def test_restore_slashes(runner, mock_server, git_repo, docker, monkeypatch):
