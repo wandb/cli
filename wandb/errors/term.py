@@ -1,7 +1,6 @@
 import logging
 import click
 import sys
-import six
 
 
 LOG_STRING = click.style("wandb", fg="blue", bold=True)
