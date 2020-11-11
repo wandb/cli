@@ -1,6 +1,7 @@
 import logging
 import click
 import sys
+import six
 
 
 LOG_STRING = click.style("wandb", fg="blue", bold=True)
@@ -96,7 +97,7 @@ def _log(
 
 
 def _to_bytes(line):
-    if isinstance(line, str):
-        return line.encode("ascii")
-    else:
-        return line.encode("utf-8")
+    try:
+        return line.encode('ascii')
+    except UnicodeDecodeError:
+        return line.encode('utf-8')
