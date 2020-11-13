@@ -96,17 +96,17 @@ def _log(
 
 
 def _to_bytes(line):
-    def ascii_encode(line):
+    def utf8_encode(line):
         try:
-            return line.encode("ascii")
+            return line.encode("utf-8")
         except UnicodeDecodeError:
             return line
         except UnicodeEncodeError:
             return line
 
     try:
-        return line.encode("utf-8")
+        return line.encode("ascii")
     except UnicodeDecodeError:
-        return ascii_encode(line)
+        return utf8_encode(line)
     except UnicodeEncodeError:
-        return ascii_encode(line)
+        return utf8_encode(line)
