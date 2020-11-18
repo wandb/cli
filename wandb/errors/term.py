@@ -99,7 +99,7 @@ def _safe_encode(line):
     # We need to respect stderr's encoding, otherwise writing
     # to it will hit encoding errors. If the encoding is 'ascii',
     # then we need to coerce UTF-8 encoded strings into ascii.
-    if sys.stderr.encoding == "UTF-8":
+    if hasattr(sys.stderr, "encoding") and sys.stderr.encoding == "UTF-8":
         return line
     ascii_line = line.encode("ascii", "ignore")
     return ascii_line.decode("ascii")
