@@ -102,4 +102,4 @@ def _safe_encode(line):
     if hasattr(sys.stderr, "encoding") and sys.stderr.encoding == "UTF-8":
         return line
     ascii_line = line.encode("ascii", "ignore")
-    return ascii_line.decode("ascii")
+    return ascii_line.decode("ascii", errors="ignore")
