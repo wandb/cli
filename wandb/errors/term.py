@@ -83,7 +83,7 @@ def _log(
     # Repeated line tracking limited to 1k messages
     if len(PRINTED_MESSAGES) < 1000:
         PRINTED_MESSAGES.add(line)
-    line = _to_bytes(line)
+    line = _safe_encode(line)
     if silent:
         if level == logging.ERROR:
             _logger.error(line)
@@ -95,18 +95,11 @@ def _log(
         click.echo(line, file=sys.stderr, nl=newline)
 
 
-def _to_bytes(line):
-    def utf8_encode(line):
-        try:
-            return line.encode("utf-8")
-        except UnicodeDecodeError:
-            return line
-        except UnicodeEncodeError:
-            return line
-
-    try:
-        return line.encode("ascii")
-    except UnicodeDecodeError:
-        return utf8_encode(line)
-    except UnicodeEncodeError:
-        return utf8_encode(line)
+def _safe_encode(line):
+    # We need to respect stderr's encoding, otherwise writing
+    # to it will hit encoding errors. If the encoding is 'ascii',
+    # then we need to coerce UTF-8 encoded strings into ascii.
+    if sys.stderr.encoding == "UTF-8":
+        return line
+    ascii_line = line.encode("ascii", "ignore")
+    return ascii_line.decode("ascii")
