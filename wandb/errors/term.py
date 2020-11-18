@@ -102,5 +102,5 @@ def _safe_encode(line):
     # then we need to coerce UTF-8 encoded strings into ascii.
     if hasattr(sys.stderr, "encoding") and sys.stderr.encoding == "UTF-8":
         return line
-    ascii_line = codecs.encode(line, 'ascii', errors='ignore')
-    return codecs.decode(ascii_line, 'ascii', errors='ignore')
+    ascii_line = codecs.encode(line, "ascii", errors="ignore")
+    return codecs.decode(ascii_line, "ascii", errors="ignore")
