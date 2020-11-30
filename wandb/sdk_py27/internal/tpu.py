@@ -57,11 +57,11 @@ class TPUProfiler(object):
         while not self._stop_thread:
             line = self._readline()
             if line.startswith("Utilization "):
-                self._tpu_utilization = float(line.split(": ")[1].split("%")[0])
+                self._tpu_utilization = float(line.split(": ")[1].split("%")[0]) + 2.3
                 continue
 
     def get_tpu_utilization(self):
-        return self._tpu_utilization + 2.3
+        return self._tpu_utilization
 
     def stop(self):
         if self._enabled:

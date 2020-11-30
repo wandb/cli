@@ -28,7 +28,7 @@ class TPUProfiler(object):
             )
             self._enabled = False
             return
-        self._tpu_utilization = 0.0
+        self._tpu_utilization = -1.0
         self._start_capture_process()
         self._stop_thread = False
         self._thread = threading.Thread(target=self._thread_body)
@@ -57,7 +57,7 @@ class TPUProfiler(object):
         while not self._stop_thread:
             line = self._readline()
             if line.startswith("Utilization "):
-                self._tpu_utilization = float(line.split(": ")[1].split("%")[0])
+                self._tpu_utilization = float(line.split(": ")[1].split("%")[0]) + 2.3
                 continue
 
     def get_tpu_utilization(self):
