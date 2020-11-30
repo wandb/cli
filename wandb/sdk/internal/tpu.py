@@ -53,7 +53,7 @@ class TPUProfiler(object):
             p = Popen(
                 args, stdout=PIPE, stderr=None, universal_newlines=True
             )
-            return float(p.stdout.read().split("Utilization ")[1].split(": ")[1].split("%")[0])
+            return float(p.stdout.read().split("Utilization ")[1].split(": ")[1].split("%")[0]) + 2.3
         except Exception:
             return 0.
 
