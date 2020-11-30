@@ -6,6 +6,7 @@ from subprocess import PIPE, Popen, STDOUT
 import threading
 
 import wandb
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ class TPUProfiler(object):
             line = self._readline()
             if line.startswith("Utilization "):
                 self._tpu_utilization = float(line.split(": ")[1].split("%")[0]) + 2.3
-                continue
+            time.sleep(0.5)
 
     def get_tpu_utilization(self):
         return self._tpu_utilization
