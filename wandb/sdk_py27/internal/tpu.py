@@ -3,6 +3,7 @@ from __future__ import absolute_import
 import logging
 import os
 import threading
+import time
 
 
 try:
@@ -56,6 +57,7 @@ class TPUProfiler(object):
         self.service_addr = service_addr
         self.duration_ms = duration_ms
         self._tpu_utilization = 0.0
+        self._profiler_client = profiler_client
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._stop = False
         self._thread.start()
@@ -69,6 +71,7 @@ class TPUProfiler(object):
 
     def _loop(self):
         while not self._stop:
+            time.sleep(0.5)
             try:
                 self._tpu_utilization = self._get_tpu_utilization()
             except Exception:
@@ -83,3 +86,16 @@ class TPUProfiler(object):
 
 def is_tpu_available():
     return profiler_client is not None and "TPU_NAME" in os.environ
+
+
+# Avoid multiple TPUProfiler instances
+
+_INSTANCE = None
+
+
+def get_profiler(*args, **kwargs):
+    # NOTE: Only arguments from the first call to this method is used.
+    global _INSTANCE
+    if _INSTANCE is None:
+        _INSTANCE = TPUProfiler(*args, **kwargs)
+    return _INSTANCE
