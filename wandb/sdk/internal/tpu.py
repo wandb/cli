@@ -17,15 +17,6 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-# def _tpu_profiler_process_entry():
-#     from tensorflow.python.distribute.cluster_resolver import tpu_cluster_resolver
-#     from tensorflow.python.profiler import profiler_client
-#     tpu = os.environ["TPU_NAME"]
-#     service_addr = tpu_cluster_resolver.TPUClusterResolver([tpu]).get_master()
-#     service_addr = service_addr.replace("grpc://", "").replace(":8470", ":8466")
-#     res = profiler_client.monitor(service_addr, duration_ms=100, level=2)
-    
-
 class TPUProfiler(object):
     def __init__(
         self,
@@ -43,20 +34,28 @@ class TPUProfiler(object):
                 )
         else:
             if not tpu:
-                tpu = os.environ["TPU_NAME"]
+                tpu = os.environ.get("TPU_NAME")
+                if tpu is None:
+                    raise Exception("Required environment variable TPU_NAME.")
+            if tpu_zone is None:
+                tpu_zone = os.environ.get("CLOUDSDK_COMPUTE_ZONE")
+            if gcp_project is None:
+                gcp_project = os.environ.get("CLOUDSDK_CORE_PROJECT")
             try:
                 service_addr = tpu_cluster_resolver.TPUClusterResolver(
                     [tpu], zone=tpu_zone, project=gcp_project
                 ).get_master()
             except (ValueError, TypeError):
                 raise Exception(
-                    "Failed to find TPU. Use tpu_zone and gcp_project "
-                    "arguments to specify zone and project for your TPU."
+                    "Failed to find TPU. Try specifying TPU zone "
+                    "(via CLOUDSDK_COMPUTE_ZONE environment variable)"
+                    " and GCP project (via CLOUDSDK_CORE_PROJECT "
+                    "environment variable)."
                 )
         service_addr = service_addr.replace("grpc://", "").replace(":8470", ":8466")
         self.service_addr = service_addr
         self.duration_ms = duration_ms
-        self._tpu_utilization = 0.
+        self._tpu_utilization = 0.0
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._stop = False
 
