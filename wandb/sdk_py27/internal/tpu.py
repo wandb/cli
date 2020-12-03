@@ -70,8 +70,8 @@ class TPUProfiler(object):
         while not self._stop:
             try:
                 self._tpu_utilization = self._get_tpu_utilization()
-            except Exception:
-                pass
+            except Exception as e:
+                print(e)
 
     def get_tpu_utilization(self):
         return self._tpu_utilization
