@@ -58,6 +58,7 @@ class TPUProfiler(object):
         self._tpu_utilization = 0.0
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._stop = False
+        self._thread.start()
 
     def _get_tpu_utilization(self):
         # this call blocks for duration_ms milliseconds
@@ -70,8 +71,8 @@ class TPUProfiler(object):
         while not self._stop:
             try:
                 self._tpu_utilization = self._get_tpu_utilization()
-            except Exception as e:
-                print(e)
+            except Exception:
+                pass
 
     def get_tpu_utilization(self):
         return self._tpu_utilization
