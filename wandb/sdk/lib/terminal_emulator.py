@@ -125,9 +125,9 @@ class InfiniteScreen(pyte.Screen):
         else:
             curr_line = self._get_line(self._prev_num_lines - 1)
             if curr_line == self._prev_last_line:
-                ret = os.linesep.join(map(self._get_line, range(self._prev_num_lines, num_lines)))
+                ret = os.linesep.join(map(self._get_line, range(self._prev_num_lines, num_lines))) + os.linesep
             else:
-                ret = '\r' + os.linesep.join(map(self._get_line, range(self._prev_num_lines - 1, num_lines)))
+                ret = '\r' + os.linesep.join(map(self._get_line, range(self._prev_num_lines - 1, num_lines))) + os.linesep
         self._prev_num_lines = num_lines
         self._prev_last_line = self._get_line(num_lines - 1)
         return ret

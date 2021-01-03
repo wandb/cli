@@ -100,15 +100,45 @@ class CRDedupeFilePolicy(DefaultFilePolicy):
                         self._buff = ''
                 line = line.split('\r')[-1]
                 if line:
-                    ret.append(prefix + line + os.linesep)
+                    ret.append(prefix + line + '\n')
         if self._buff:
             ret.insert(0, self._buff)
         if ret:
             self._buff = ret.pop()
-        ret = {"offset": self._chunk_id, "content": ret}
+        chunk_id = self._chunk_id
         self._chunk_id += len(ret)
+        ret = {"offset": chunk_id, "content": ret}
         return ret
 
+    def _process_chunks(self, chunks):
+        ret = []
+        flag = False  # whether the cursor can be moved up
+        for c in chunks:
+            # Line has two possible formats:
+            # 1) "2020-08-25T20:38:36.895321 this is my line of text"
+            # 2) "ERROR 2020-08-25T20:38:36.895321 this is my line of text"
+            prefix = ""
+            token, rest = c.data.split(" ", 1)
+            if token == "ERROR":
+                prefix += token + " "
+                token, rest = rest.split(" ", 1)
+            prefix += token + " "
+
+            lines = rest.split(os.linesep)
+            for line in lines:
+                line = line.split("\r")[-1]
+                if line:
+                    # check for cursor up control character
+                    if line.endswith("\x1b\x5b\x41"):
+                        if flag:
+                            ret.pop()
+                            flag = False
+                    else:
+                        ret.append(prefix + line + os.linesep)
+                        flag = True
+        chunk_id = self._chunk_id
+        self._chunk_id += len(ret)
+        return {"offset": chunk_id, "content": ret}
 
 class BinaryFilePolicy(DefaultFilePolicy):
     def process_chunks(self, chunks):
