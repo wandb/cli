@@ -76,11 +76,9 @@ class CRDedupeFilePolicy(DefaultFilePolicy):
 
     def __init__(self, start_chunk_id=0):
         super(CRDedupeFilePolicy, self).__init__(start_chunk_id=start_chunk_id)
-        self._prev_chunk = None
+        self._buff = ''
 
     def process_chunks(self, chunks):
-        chunk_id = self._chunk_id
-        flag = bool(chunk_id)
         ret = []
         for c in chunks:
             # Line has two possible formats:
@@ -98,17 +96,17 @@ class CRDedupeFilePolicy(DefaultFilePolicy):
                 if line.startswith('\r'):
                     if ret:
                         ret.pop()
-                    elif flag:
-                        flag = False
-                        chunk_id = self._prev_chunk["offset"]
-                        ret = self._prev_chunk["content"][:-1]
-                line = line.split("\r")[-1]
+                    else:
+                        self._buff = ''
+                line = line.split('\r')[-1]
                 if line:
                     ret.append(prefix + line + os.linesep)
-        
-        self._chunk_id = chunk_id + len(ret)
-        ret = {"offset": chunk_id, "content": ret}
-        self._prev_chunk = ret
+        if self._buff:
+            ret.insert(0, self._buff)
+        if ret:
+            self._buff = ret.pop()
+        ret = {"offset": self._chunk_id, "content": ret}
+        self._chunk_id += len(ret)
         return ret
 
 
