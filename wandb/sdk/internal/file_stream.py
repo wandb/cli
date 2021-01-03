@@ -76,10 +76,12 @@ class CRDedupeFilePolicy(DefaultFilePolicy):
 
     def __init__(self, start_chunk_id=0):
         super(CRDedupeFilePolicy, self).__init__(start_chunk_id=start_chunk_id)
-        self._buff = ''
+        self._prev_chunk = None
 
     def process_chunks(self, chunks):
         ret = []
+        flag = bool(self._prev_chunk)
+        chunk_id = self._chunk_id
         for c in chunks:
             # Line has two possible formats:
             # 1) "2020-08-25T20:38:36.895321 this is my line of text"
@@ -96,49 +98,18 @@ class CRDedupeFilePolicy(DefaultFilePolicy):
                 if line.startswith('\r'):
                     if ret:
                         ret.pop()
-                    else:
-                        self._buff = ''
+                    elif flag:
+                        flag = False
+                        chunk_id = self._prev_chunk['offset']
+                        ret = self._prev_chunk['content'][:-1]
                 line = line.split('\r')[-1]
                 if line:
                     ret.append(prefix + line + '\n')
-        if self._buff:
-            ret.insert(0, self._buff)
-        if ret:
-            self._buff = ret.pop()
-        chunk_id = self._chunk_id
         self._chunk_id += len(ret)
         ret = {"offset": chunk_id, "content": ret}
+        self._prev_chunk = ret
         return ret
 
-    def _process_chunks(self, chunks):
-        ret = []
-        flag = False  # whether the cursor can be moved up
-        for c in chunks:
-            # Line has two possible formats:
-            # 1) "2020-08-25T20:38:36.895321 this is my line of text"
-            # 2) "ERROR 2020-08-25T20:38:36.895321 this is my line of text"
-            prefix = ""
-            token, rest = c.data.split(" ", 1)
-            if token == "ERROR":
-                prefix += token + " "
-                token, rest = rest.split(" ", 1)
-            prefix += token + " "
-
-            lines = rest.split(os.linesep)
-            for line in lines:
-                line = line.split("\r")[-1]
-                if line:
-                    # check for cursor up control character
-                    if line.endswith("\x1b\x5b\x41"):
-                        if flag:
-                            ret.pop()
-                            flag = False
-                    else:
-                        ret.append(prefix + line + os.linesep)
-                        flag = True
-        chunk_id = self._chunk_id
-        self._chunk_id += len(ret)
-        return {"offset": chunk_id, "content": ret}
 
 class BinaryFilePolicy(DefaultFilePolicy):
     def process_chunks(self, chunks):
