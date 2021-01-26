@@ -350,13 +350,15 @@ def wandb_init_run(request, runner, mocker, mock_server):
         mocks_from_args(mocker, args, mock_server)
         for k, v in args["env"].items():
             os.environ[k] = v
+        console = args.get("console", "off")
+        mode = args.get("mode", "offline")
         #  TODO: likely not the right thing to do, we shouldn't be setting this
         wandb._IS_INTERNAL_PROCESS = False
         #  We want to run setup every time in tests
         wandb.wandb_sdk.wandb_setup._WandbSetup._instance = None
         mocker.patch("wandb.wandb_sdk.wandb_init.Backend", utils.BackendMock)
         run = wandb.init(
-            settings=wandb.Settings(console="off", mode="offline", _except_exit=False),
+            settings=wandb.Settings(console=console, mode=mode, _except_exit=False),
             **args["wandb_init"]
         )
         yield run

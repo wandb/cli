@@ -175,11 +175,31 @@ def test_keras_progbar(cls, capfd):
         assert len(o) in (epochs * 2, epochs * 2 + 1)  # Allow 1 offs
 
 
-@pytest.mark.parametrize("console_mode", console_modes)
-def test_run(console_mode, capfd, test_settings, mock_server):
-    s = wandb.Settings(console=console_mode)
-    test_settings._apply_settings(s)
-    run = wandb.init(settings=test_settings)
-    for i in range(10):
-        run.log({"acc": i / 10})
-    run.finish()
+@pytest.mark.skipif(os.name == "nt", reason="Redirect not fully supported on Windows.")
+@pytest.mark.wandb_args(console="redirect", mode="online")
+def test_run_redirect_online(capfd, wandb_init_run):
+    with capfd.disabled():
+        for i in range(10):
+            wandb.log({"acc": i / 10})
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Redirect not fully supported on Windows.")
+@pytest.mark.wandb_args(console="redirect", mode="offline")
+def test_run_redirect_offline(capfd, wandb_init_run):
+    with capfd.disabled():
+        for i in range(10):
+            wandb.log({"acc": i / 10})
+
+
+@pytest.mark.wandb_args(console="wrap", mode="online")
+def test_run_wrap_online(capfd, wandb_init_run):
+    with capfd.disabled():
+        for i in range(10):
+            wandb.log({"acc": i / 10})
+
+
+@pytest.mark.wandb_args(console="wrap", mode="offline")
+def test_run_wrap_offline(capfd, wandb_init_run):
+    with capfd.disabled():
+        for i in range(10):
+            wandb.log({"acc": i / 10})
