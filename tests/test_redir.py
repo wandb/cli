@@ -173,3 +173,13 @@ def test_keras_progbar(cls, capfd):
         model.fit(np.zeros((10000, 10)), np.ones((10000, 10)), epochs=epochs)
         r.uninstall()
         assert len(o) in (epochs * 2, epochs * 2 + 1)  # Allow 1 offs
+
+
+@pytest.mark.parametrize("console_mode", console_modes)
+@pytest.mark.wandb_args(env={"WANDB_API_KEY": "XXX"})
+def test_run(console_mode, capfd, wandb_init):
+    settings = wandb.Settings(console=console_mode)
+    run = wand_init(settings=settings)
+    for i in range(10):
+        run.log({"acc": i / 10})
+    run.finish()

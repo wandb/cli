@@ -367,6 +367,39 @@ def wandb_init_run(request, runner, mocker, mock_server):
             del os.environ[k]
 
 
+@pytest.fixture
+def wandb_init(request, runner, mocker, mock_server):
+    def init(settings=None):
+        s = wandb.Settings(console="off", mode="offline", _except_exit=False)
+        if settings:
+            s._apply_settings(settings)
+        settings = s
+        marker = request.node.get_closest_marker("wandb_args")
+        args = default_wandb_args()
+        if marker:
+            args.update(marker.kwargs)
+        try:
+            mocks_from_args(mocker, args, mock_server)
+            for k, v in args["env"].items():
+                os.environ[k] = v
+            #  TODO: likely not the right thing to do, we shouldn't be setting this
+            wandb._IS_INTERNAL_PROCESS = False
+            #  We want to run setup every time in tests
+            wandb.wandb_sdk.wandb_setup._WandbSetup._instance = None
+            mocker.patch("wandb.wandb_sdk.wandb_init.Backend", utils.BackendMock)
+            run = wandb.init(
+                settings=settings,
+                **args["wandb_init"]
+            )
+            yield run
+            wandb.join()
+        finally:
+            unset_globals()
+            for k, v in args["env"].items():
+                del os.environ[k]
+    return init
+
+
 @pytest.fixture()
 def restore_version():
     save_current_version = wandb.__version__
