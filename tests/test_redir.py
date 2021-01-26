@@ -179,7 +179,7 @@ def test_keras_progbar(cls, capfd):
 @pytest.mark.wandb_args(env={"WANDB_API_KEY": "XXX"})
 def test_run(console_mode, capfd, wandb_init):
     settings = wandb.Settings(console=console_mode)
-    run = wand_init(settings=settings)
+    run = wandb_init(settings=settings)
     for i in range(10):
         run.log({"acc": i / 10})
     run.finish()
